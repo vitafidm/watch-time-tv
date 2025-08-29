@@ -6,6 +6,7 @@ import { createClaimTokenFlow } from './flows/claim-token-flow';
 import { agentClaimFlow } from './flows/agent-claim-flow';
 import { agentIngestFlow } from './flows/agent-ingest-flow';
 import { playbackReportFlow } from './flows/playback-report-flow';
+import { tmdbEnrichFlow, tmdbBackfillSweep } from "./flows/tmdb-enrich-flow";
 
 // Initialize Firebase Admin SDK
 if (!admin.apps.length) {
@@ -212,7 +213,8 @@ export const playbackReport = functions.https.onRequest(async (req, res) => {
       const result = await playbackReportFlow(decoded.uid, req.body);
       res.status(200).json(result);
 
-    } catch (err: any) {
+    } catch (err: any)
+       {
       const code = err?.code;
       if (code === "invalid-argument") {
         return res.status(400).json({ error: { status: "INVALID_ARGUMENT", message: err.message } });
@@ -225,3 +227,56 @@ export const playbackReport = functions.https.onRequest(async (req, res) => {
     }
   });
 });
+
+
+// Protected HTTPS endpoint: POST /api/enrich/tmdb
+export const tmdbEnrich = functions.https.onRequest(async (req, res) => {
+  corsHandler(req, res, async () => {
+    try {
+      if (req.method !== "POST") {
+        return res.status(405).json({ error: { status: "METHOD_NOT_ALLOWED", message: "Use POST" }});
+      }
+
+      const header = req.headers.authorization || "";
+      if (!header.startsWith("Bearer ")) {
+        return res.status(401).json({ error: { status: "UNAUTHENTICATED", message: "Missing Authorization: Bearer <ID_TOKEN>" }});
+      }
+      const idToken = header.substring("Bearer ".length);
+      const decoded = await admin.auth().verifyIdToken(idToken).catch(() => null);
+      if (!decoded?.uid) {
+        return res.status(401).json({ error: { status: "UNAUTHENTICATED", message: "Invalid ID token" }});
+      }
+
+      const out = await tmdbEnrichFlow(decoded.uid, req.body);
+      return res.status(200).json(out);
+
+    } catch (err: any) {
+      const code = err?.code;
+      if (err?.code === "invalid-argument") {
+        return res.status(400).json({ error: { status: "INVALID_ARGUMENT", message: err.message }});
+      }
+      if (err?.code === "failed-precondition") {
+        return res.status(412).json({ error: { status: "FAILED_PRECONDITION", message: err.message }});
+      }
+      if (err?.code === "resource-exhausted") {
+        return res.status(429).json({ error: { status: "RESOURCE_EXHAUSTED", message: err.message }});
+      }
+      functions.logger.error("tmdbEnrich error", err);
+      return res.status(500).json({ error: { status: "INTERNAL", message: "Internal error" }});
+    }
+  });
+});
+
+// Scheduled backfill every hour
+export const tmdbBackfill = functions.pubsub
+  .schedule("every 60 minutes")
+  .onRun(async () => {
+    try {
+      const res = await tmdbBackfillSweep();
+      functions.logger.info(`TMDB Backfill sweep completed. Processed owners: ${res.ownersProcessed}`);
+      return res;
+    } catch (e) {
+      functions.logger.error("tmdbBackfill error", e);
+      return null;
+    }
+  });
