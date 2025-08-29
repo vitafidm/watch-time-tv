@@ -5,6 +5,7 @@ import * as cors from 'cors';
 import { createClaimTokenFlow } from './flows/claim-token-flow';
 import { agentClaimFlow } from './flows/agent-claim-flow';
 import { agentIngestFlow } from './flows/agent-ingest-flow';
+import { playbackReportFlow } from './flows/playback-report-flow';
 
 // Initialize Firebase Admin SDK
 if (!admin.apps.length) {
@@ -175,6 +176,52 @@ export const agentIngest = functions.https.onRequest(async (req, res) => {
         functions.logger.error('agentIngest unhandled error', err);
         res.status(500).json({ error: { status: 'INTERNAL', message: 'An internal server error occurred.' } });
       }
+    }
+  });
+});
+
+/**
+ * An HTTPS endpoint for a logged-in user to report playback progress.
+ */
+export const playbackReport = functions.https.onRequest(async (req, res) => {
+  corsHandler(req, res, async () => {
+    if (req.method !== 'POST') {
+      res.status(405).json({ error: { status: 'METHOD_NOT_ALLOWED', message: 'Use POST' } });
+      return;
+    }
+
+    try {
+      const authHeader = req.headers.authorization || '';
+      if (!authHeader.startsWith('Bearer ')) {
+        res.status(401).json({
+          error: {
+            status: 'UNAUTHENTICATED',
+            message: 'Missing or invalid Authorization header. Use `Bearer <ID_TOKEN>`.'
+          }
+        });
+        return;
+      }
+      const idToken = authHeader.substring('Bearer '.length);
+      const decoded = await admin.auth().verifyIdToken(idToken).catch(() => null);
+      
+      if (!decoded?.uid) {
+        res.status(401).json({ error: { status: 'UNAUTHENTICATED', message: 'Invalid ID token' }});
+        return;
+      }
+      
+      const result = await playbackReportFlow(decoded.uid, req.body);
+      res.status(200).json(result);
+
+    } catch (err: any) {
+      const code = err?.code;
+      if (code === "invalid-argument") {
+        return res.status(400).json({ error: { status: "INVALID_ARGUMENT", message: err.message } });
+      }
+      if (code === "failed-precondition") {
+        return res.status(412).json({ error: { status: "FAILED_PRECONDITION", message: err.message } });
+      }
+      functions.logger.error("playbackReport error", err);
+      return res.status(500).json({ error: { status: "INTERNAL", message: "Internal error" } });
     }
   });
 });

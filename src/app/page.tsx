@@ -1,3 +1,4 @@
+
 "use client"
 
 import { useState, useEffect, useMemo } from 'react';
@@ -68,4 +69,22 @@ export default function BrowsePage() {
 //
 //   // Render rows using `recent`, `movies`, `trending` once user is signed in.
 //   // ...
+// }
+// --- Example: wiring playback ---
+// import { reportPlayback, createPlaybackThrottler } from "@/lib/playback";
+// import { useContinueWatching } from "@/lib/hooks/continueWatching";
+// import { useAuthUser } from "@/hooks/useAuthUser";
+//
+// const { user } = useAuthUser();
+// const { data: cw } = useContinueWatching(user?.uid || "", 18);
+//
+// // In your player component:
+// const throttle = createPlaybackThrottler(10000);
+// async function onTimeUpdate(mediaId: string, position: number, duration: number) {
+//   await throttle(() =>
+//     reportPlayback(process.env.NEXT_PUBLIC_PLAYBACK_REPORT_URL!, { mediaId, position, duration })
+//   );
+// }
+// async function onEnded(mediaId: string, duration: number) {
+//   await reportPlayback(process.env.NEXT_PUBLIC_PLAYBACK_REPORT_URL!, { mediaId, position: duration, duration, finished: true });
 // }
