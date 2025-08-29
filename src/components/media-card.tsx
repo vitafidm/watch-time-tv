@@ -1,3 +1,4 @@
+
 import Link from 'next/link';
 import Image from 'next/image';
 import type { MediaItem } from '@/lib/types';
@@ -31,10 +32,6 @@ export function MediaCard({ item }: MediaCardProps) {
           </h3>
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <span>{new Date(item.release_date).getFullYear()}</span>
-            <span className="flex items-center gap-1">
-              <Star className="w-3 h-3 text-yellow-400 fill-yellow-400" />
-              {item.vote_average.toFixed(1)}
-            </span>
           </div>
         </div>
       </div>
