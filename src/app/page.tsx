@@ -1,32 +1,50 @@
 "use client"
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { mediaData } from '@/lib/mock-data';
 import type { MediaItem } from '@/lib/types';
-import { MediaCard } from '@/components/media-card';
 import { useSearch } from '@/hooks/use-search';
+import { MediaCarousel } from '@/components/media-carousel';
 
 export default function BrowsePage() {
-  const [filteredMedia, setFilteredMedia] = useState<MediaItem[]>(mediaData);
   const { searchTerm } = useSearch();
 
+  const [movies, tvShows] = useMemo(() => {
+    const movies = mediaData.filter(item => item.media_type === 'movie');
+    const tvShows = mediaData.filter(item => item.media_type === 'tv');
+    return [movies, tvShows];
+  }, []);
+
+  const [filteredMovies, setFilteredMovies] = useState<MediaItem[]>(movies);
+  const [filteredTvShows, setFilteredTvShows] = useState<MediaItem[]>(tvShows);
+
   useEffect(() => {
-    const results = mediaData.filter(item =>
-      item.title.toLowerCase().includes(searchTerm.toLowerCase())
+    const lowercasedSearchTerm = searchTerm.toLowerCase();
+    setFilteredMovies(
+      movies.filter(item =>
+        item.title.toLowerCase().includes(lowercasedSearchTerm)
+      )
     );
-    setFilteredMedia(results);
-  }, [searchTerm]);
+    setFilteredTvShows(
+      tvShows.filter(item =>
+        item.title.toLowerCase().includes(lowercasedSearchTerm)
+      )
+    );
+  }, [searchTerm, movies, tvShows]);
+
+  const hasResults = filteredMovies.length > 0 || filteredTvShows.length > 0;
 
   return (
-    <div className="space-y-6">
-      <h1 className="font-headline text-4xl font-bold tracking-tight">Browse Catalog</h1>
-      
-      {filteredMedia.length > 0 ? (
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-4 md:gap-6">
-          {filteredMedia.map(item => (
-            <MediaCard key={item.id} item={item} />
-          ))}
-        </div>
+    <div className="space-y-12">
+      {hasResults ? (
+        <>
+          {filteredMovies.length > 0 && (
+            <MediaCarousel title="Popular Movies" items={filteredMovies} />
+          )}
+          {filteredTvShows.length > 0 && (
+            <MediaCarousel title="Popular TV Shows" items={filteredTvShows} />
+          )}
+        </>
       ) : (
         <div className="flex flex-col items-center justify-center text-center py-20">
           <p className="text-2xl font-headline text-muted-foreground">No results found</p>
