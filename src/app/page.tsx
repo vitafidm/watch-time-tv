@@ -54,3 +54,18 @@ export default function BrowsePage() {
     </div>
   );
 }
+
+// --- Example usage of catalog hooks (for reference only) ---
+// import { useRecentlyAdded, useMediaByType, useTrending } from "@/hooks/catalog";
+// import { useAuthUser } from "@/hooks/useAuthUser";
+//
+// export default function HomePage() {
+//   const { user } = useAuthUser();
+//   const uid = user?.uid || "";
+//   const { data: recent, loading: loadingRecent } = useRecentlyAdded(uid, 18);
+//   const { data: movies } = useMediaByType(uid, "movie", 18);
+//   const { data: trending } = useTrending(uid, 18);
+//
+//   // Render rows using `recent`, `movies`, `trending` once user is signed in.
+//   // ...
+// }
