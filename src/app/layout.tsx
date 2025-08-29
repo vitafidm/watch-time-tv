@@ -2,10 +2,7 @@ import type { Metadata } from 'next';
 import { Toaster } from "@/components/ui/toaster";
 import { WatchlistProvider } from '@/hooks/use-watchlist';
 import { SearchProvider } from '@/hooks/use-search';
-import { Sidebar, SidebarContent, SidebarHeader, SidebarInset, SidebarProvider } from '@/components/ui/sidebar';
-import { MainNav } from '@/components/main-nav';
 import { Header } from '@/components/header';
-import { Logo } from '@/components/logo';
 import { cn } from '@/lib/utils';
 import './globals.css';
 
@@ -30,24 +27,10 @@ export default function RootLayout({
         <Toaster />
         <SearchProvider>
           <WatchlistProvider>
-            <SidebarProvider>
-              <div className="flex min-h-screen w-full">
-                  <Sidebar className="border-r">
-                    <SidebarHeader className="p-4">
-                      <Logo />
-                    </SidebarHeader>
-                    <SidebarContent className="p-2">
-                      <MainNav />
-                    </SidebarContent>
-                  </Sidebar>
-                <div className="flex flex-1 flex-col">
-                  <Header />
-                  <SidebarInset>
-                    <main className="flex-1 p-4 sm:p-6">{children}</main>
-                  </SidebarInset>
-                </div>
-              </div>
-            </SidebarProvider>
+            <div className="flex min-h-screen w-full flex-col">
+              <Header />
+              <main className="flex-1 p-4 sm:p-6">{children}</main>
+            </div>
           </WatchlistProvider>
         </SearchProvider>
       </body>

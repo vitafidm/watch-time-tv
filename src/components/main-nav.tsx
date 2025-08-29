@@ -2,24 +2,16 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Bookmark, Home } from "lucide-react";
-
-import {
-  SidebarMenu,
-  SidebarMenuItem,
-  SidebarMenuButton,
-} from "@/components/ui/sidebar";
+import { cn } from "@/lib/utils";
 
 const menuItems = [
   {
     href: "/",
     label: "Browse",
-    icon: Home,
   },
   {
     href: "/watchlist",
     label: "Watchlist",
-    icon: Bookmark,
   },
 ];
 
@@ -27,21 +19,19 @@ export function MainNav() {
   const pathname = usePathname();
 
   return (
-    <SidebarMenu>
+    <nav className="hidden md:flex items-center space-x-6 text-sm font-medium">
       {menuItems.map((item) => (
-        <SidebarMenuItem key={item.href}>
-          <SidebarMenuButton
-            asChild
-            isActive={pathname === item.href}
-            tooltip={item.label}
-          >
-            <Link href={item.href}>
-              <item.icon />
-              <span>{item.label}</span>
-            </Link>
-          </SidebarMenuButton>
-        </SidebarMenuItem>
+        <Link 
+          key={item.href}
+          href={item.href}
+          className={cn(
+            "transition-colors hover:text-primary",
+            pathname === item.href ? "text-primary font-semibold" : "text-muted-foreground"
+          )}
+        >
+          {item.label}
+        </Link>
       ))}
-    </SidebarMenu>
+    </nav>
   );
 }
