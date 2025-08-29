@@ -3,7 +3,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { doc, onSnapshot } from 'firebase/firestore';
-import { auth, db } from '@/lib/firebase.client';
+import { db } from '@/lib/firebase.client';
 import type { ServerDoc } from '@/lib/db.types';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -12,6 +12,7 @@ import { useToast } from '@/hooks/use-toast';
 import { Copy, Check, ExternalLink, RefreshCw, XCircle, CheckCircle, Hourglass, KeyRound } from 'lucide-react';
 import Link from 'next/link';
 import { useAuthUser } from '@/hooks/useAuthUser';
+import ProtectedRoute from '@/components/ProtectedRoute';
 
 type WizardState = 'idle' | 'generating' | 'waiting' | 'linked' | 'expired' | 'error';
 
@@ -24,8 +25,8 @@ interface TokenData {
 
 const claimTokenUrl = process.env.NEXT_PUBLIC_CLAIM_TOKEN_URL;
 
-export default function ConnectPage() {
-  const { user, loading: authLoading } = useAuthUser();
+function ConnectWizard() {
+  const { user } = useAuthUser();
   const { toast } = useToast();
 
   const [wizardState, setWizardState] = useState<WizardState>('idle');
@@ -157,9 +158,6 @@ AGENT_INGEST_URL=${process.env.NEXT_PUBLIC_AGENT_INGEST_URL || 'YOUR_AGENT_INGES
   };
 
   const renderContent = () => {
-    if (authLoading) return <div className="text-center p-8">Loading user...</div>;
-    if (!user) return <div className="text-center p-8">Please sign in to connect a server.</div>;
-
     switch (wizardState) {
       case 'idle':
         return (
@@ -265,4 +263,12 @@ AGENT_INGEST_URL=${process.env.NEXT_PUBLIC_AGENT_INGEST_URL || 'YOUR_AGENT_INGES
       </div>
     </div>
   );
+}
+
+export default function ConnectPage() {
+  return (
+    <ProtectedRoute>
+      <ConnectWizard />
+    </ProtectedRoute>
+  )
 }

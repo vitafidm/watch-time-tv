@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import { Toaster } from "@/components/ui/toaster";
 import { WatchlistProvider } from '@/hooks/use-watchlist';
 import { SearchProvider } from '@/hooks/use-search';
-import { Header } from '@/components/header';
+import { AppHeader } from '@/components/AppHeader';
 import { cn } from '@/lib/utils';
 import './globals.css';
 
@@ -28,7 +28,7 @@ export default function RootLayout({
         <SearchProvider>
           <WatchlistProvider>
             <div className="flex min-h-screen w-full flex-col">
-              <Header />
+              <AppHeader />
               <main className="flex-1 p-4 sm:p-6">{children}</main>
             </div>
           </WatchlistProvider>
