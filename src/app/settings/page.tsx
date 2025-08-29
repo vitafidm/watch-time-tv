@@ -3,9 +3,8 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { useAuthState } from 'react-firebase-hooks/auth';
 import { collection, onSnapshot, query, orderBy } from 'firebase/firestore';
-import { auth, db } from '@/lib/firebase.client';
+import { db } from '@/lib/firebase.client';
 import type { ServerDoc } from '@/lib/db.types';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -13,6 +12,7 @@ import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Skeleton } from '@/components/ui/skeleton';
 import { PlusCircle } from 'lucide-react';
+import { useAuthUser } from '@/hooks/useAuthUser';
 
 function ServerStatusBadge({ status }: { status: ServerDoc['status'] }) {
     const variant = status === 'linked' ? 'default' : status === 'pending' ? 'secondary' : 'destructive';
@@ -21,7 +21,7 @@ function ServerStatusBadge({ status }: { status: ServerDoc['status'] }) {
 }
 
 export default function SettingsPage() {
-  const [user, authLoading, authError] = useAuthState(auth);
+  const { user, loading: authLoading } = useAuthUser();
   const [servers, setServers] = useState<ServerDoc[]>([]);
   const [loading, setLoading] = useState(true);
 

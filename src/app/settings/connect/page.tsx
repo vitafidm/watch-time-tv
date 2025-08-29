@@ -2,7 +2,6 @@
 "use client"
 
 import { useState, useEffect, useCallback } from 'react';
-import { useAuthState } from 'react-firebase-hooks/auth';
 import { doc, onSnapshot } from 'firebase/firestore';
 import { auth, db } from '@/lib/firebase.client';
 import type { ServerDoc } from '@/lib/db.types';
@@ -12,6 +11,7 @@ import { Input } from '@/components/ui/input';
 import { useToast } from '@/hooks/use-toast';
 import { Copy, Check, ExternalLink, RefreshCw, XCircle, CheckCircle, Hourglass, KeyRound } from 'lucide-react';
 import Link from 'next/link';
+import { useAuthUser } from '@/hooks/useAuthUser';
 
 type WizardState = 'idle' | 'generating' | 'waiting' | 'linked' | 'expired' | 'error';
 
@@ -25,7 +25,7 @@ interface TokenData {
 const claimTokenUrl = process.env.NEXT_PUBLIC_CLAIM_TOKEN_URL;
 
 export default function ConnectPage() {
-  const [user, authLoading] = useAuthState(auth);
+  const { user, loading: authLoading } = useAuthUser();
   const { toast } = useToast();
 
   const [wizardState, setWizardState] = useState<WizardState>('idle');
@@ -266,4 +266,3 @@ AGENT_INGEST_URL=${process.env.NEXT_PUBLIC_AGENT_INGEST_URL || 'YOUR_AGENT_INGES
     </div>
   );
 }
-
