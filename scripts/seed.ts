@@ -35,6 +35,7 @@
 
 import { initializeApp, cert } from 'firebase-admin/app';
 import { getFirestore, Timestamp } from 'firebase-admin/firestore';
+import { createHash } from 'crypto';
 
 // --- Configuration ---
 const { SEED_UID, SEED_EMAIL } = process.env;
@@ -45,6 +46,13 @@ if (!SEED_UID || !SEED_EMAIL) {
   );
   process.exit(1);
 }
+
+// --- Helpers ---
+function stableMediaId(serverId: string, path: string): string {
+  const identifier = `${serverId}:${path}`;
+  return createHash('sha1').update(identifier).digest('hex');
+}
+
 
 // The Admin SDK automatically connects to the emulator if FIRESTORE_EMULATOR_HOST is set.
 // No special configuration is needed for that.
@@ -89,8 +97,11 @@ async function seedDatabase() {
     console.log(` -> Wrote: ${serverRef.path}`);
 
     // 3. Create Media Docs
-    const mediaId1 = 'movie-001';
-    const mediaId2 = 'movie-002';
+    const mediaPath1 = '/movies/Cosmic.Odyssey.2014.1080p.mkv';
+    const mediaId1 = stableMediaId(serverId, mediaPath1);
+    
+    const mediaPath2 = '/movies/The.Shadow.Realm.2022.1080p.mkv';
+    const mediaId2 = stableMediaId(serverId, mediaPath2);
 
     await mediaRef.doc(mediaId1).set({
       mediaId: mediaId1,
@@ -98,7 +109,7 @@ async function seedDatabase() {
       type: 'movie',
       year: 2014,
       filename: 'Cosmic.Odyssey.2014.1080p.mkv',
-      path: '/movies/Cosmic.Odyssey.2014.1080p.mkv',
+      path: mediaPath1,
       serverId: serverId,
       size: 1234567890,
       duration: 7200,
@@ -115,7 +126,7 @@ async function seedDatabase() {
         type: 'movie',
         year: 2022,
         filename: 'The.Shadow.Realm.2022.1080p.mkv',
-        path: '/movies/The.Shadow.Realm.2022.1080p.mkv',
+        path: mediaPath2,
         serverId: serverId,
         size: 2345678901,
         duration: 8100,
