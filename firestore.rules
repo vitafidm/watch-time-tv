@@ -3,26 +3,28 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Default deny all access to any path not explicitly matched.
+    // Default deny for anything not explicitly allowed.
     match /{document=**} {
       allow read, write: if false;
     }
 
-    // Helper function to verify a request is from an authenticated user
-    // who owns the data, identified by their UID.
+    // Helper: only the authenticated owner can access their data.
     function isOwner(uid) {
       return request.auth != null && request.auth.uid == uid;
     }
 
-    // Secure all documents and subcollections under a user's private path.
-    // This single recursive match covers:
-    // /users/{uid}
-    // /users/{uid}/servers/{serverId}
-    // /users/{uid}/media/{mediaId}
-    // /users/{uid}/playback/{playbackId}
-    // /users/{uid}/collections/{collectionId}
-    // /users/{uid}/servers_meta/{metaId}
-    // ...and any other nested documents or collections.
+    // Allow owner access to the root user document: /users/{uid}
+    match /users/{uid} {
+      allow read, write: if isOwner(uid);
+    }
+
+    // Allow owner access to ALL descendants under /users/{uid}
+    // Examples:
+    //   /users/{uid}/servers/{serverId}
+    //   /users/{uid}/media/{mediaId}
+    //   /users/{uid}/playback/{mediaId}
+    //   /users/{uid}/collections/{collectionId}
+    //   /users/{uid}/servers_meta/{docId}
     match /users/{uid}/{document=**} {
       allow read, write: if isOwner(uid);
     }
