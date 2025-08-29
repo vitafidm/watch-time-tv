@@ -3,6 +3,7 @@ import * as functions from 'firebase-functions';
 import * as admin from 'firebase-admin';
 import * as cors from 'cors';
 import { createClaimTokenFlow } from './flows/claim-token-flow';
+import { agentClaimFlow } from './flows/agent-claim-flow';
 
 // Initialize Firebase Admin SDK
 if (!admin.apps.length) {
@@ -67,6 +68,55 @@ export const claimToken = functions.https.onRequest(async (req, res) => {
         res.status(500).json({
           error: { status: 'INTERNAL', message: 'An internal error occurred.' },
         });
+      }
+    }
+  });
+});
+
+/**
+ * A public HTTPS endpoint for a local agent to claim its token and receive a
+ * permanent API key.
+ */
+export const agentClaim = functions.https.onRequest(async (req, res) => {
+  corsHandler(req, res, async () => {
+    if (req.method !== 'POST') {
+      res.status(405).json({ error: { status: 'METHOD_NOT_ALLOWED', message: 'Use POST' }});
+      return;
+    }
+
+    try {
+      const ip =
+        (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ||
+        req.socket?.remoteAddress ||
+        null;
+
+      const { claimPublicId, claimSecret, agentName, agentVersion } = req.body || {};
+      if (!claimPublicId || !claimSecret) {
+        res.status(400).json({ error: { status: 'INVALID_ARGUMENT', message: 'claimPublicId and claimSecret are required' }});
+        return;
+      }
+
+      const result = await agentClaimFlow({
+        claimPublicId,
+        claimSecret,
+        agentName,
+        agentVersion,
+        requesterIp: ip,
+      });
+
+      res.status(200).json(result);
+
+    } catch (err: any) {
+      const code = err?.code;
+      if (code === 'permission-denied') {
+        res.status(403).json({ error: { status: 'PERMISSION_DENIED', message: err.message }});
+      } else if (code === 'failed-precondition') {
+        res.status(410).json({ error: { status: 'FAILED_PRECONDITION', message: err.message }});
+      } else if (code === 'already-exists') {
+        res.status(409).json({ error: { status: 'ALREADY_EXISTS', message: err.message }});
+      } else {
+        functions.logger.error('agentClaim error', err);
+        res.status(500).json({ error: { status: 'INTERNAL', message: 'Internal error' }});
       }
     }
   });
