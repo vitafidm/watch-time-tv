@@ -13,6 +13,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Skeleton } from '@/components/ui/skeleton';
 import { PlusCircle } from 'lucide-react';
 import { useAuthUser } from '@/hooks/useAuthUser';
+import ProtectedRoute from '@/components/ProtectedRoute';
 
 function ServerStatusBadge({ status }: { status: ServerDoc['status'] }) {
     const variant = status === 'linked' ? 'default' : status === 'pending' ? 'secondary' : 'destructive';
@@ -20,8 +21,8 @@ function ServerStatusBadge({ status }: { status: ServerDoc['status'] }) {
     return <Badge variant="outline" className={className}>{status}</Badge>;
 }
 
-export default function SettingsPage() {
-  const { user, loading: authLoading } = useAuthUser();
+function Settings() {
+  const { user } = useAuthUser();
   const [servers, setServers] = useState<ServerDoc[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -38,39 +39,18 @@ export default function SettingsPage() {
       });
 
       return () => unsubscribe();
-    } else if (!authLoading) {
-      setLoading(false);
+    } else {
+        // If there's no user, we're not loading data, so set loading to false.
+        // This can happen if the user signs out.
+        setLoading(false);
+        setServers([]); // Clear servers on sign out
     }
-  }, [user, authLoading]);
+  }, [user]);
 
-  if (authLoading || loading) {
-    return (
-      <div className="space-y-4">
-        <h1 className="font-headline text-4xl font-bold tracking-tight">Settings</h1>
-        <Card>
-          <CardHeader>
-            <CardTitle>Your Servers</CardTitle>
-            <CardDescription>Manage your connected media servers.</CardDescription>
-          </CardHeader>
-          <CardContent>
-             <div className="space-y-2">
-                <Skeleton className="h-10 w-full" />
-                <Skeleton className="h-10 w-full" />
-                <Skeleton className="h-10 w-full" />
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
+  // We rely on the ProtectedRoute to handle the loading state until user is determined.
+  // The internal loading is for the Firestore query.
+  if (!user) return null;
 
-  if (!user) {
-    return (
-      <div className="text-center">
-        <p>Please sign in to manage your settings.</p>
-      </div>
-    );
-  }
 
   return (
     <div className="space-y-6">
@@ -90,36 +70,52 @@ export default function SettingsPage() {
           <CardDescription>A list of your connected media servers.</CardDescription>
         </CardHeader>
         <CardContent>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Agent Version</TableHead>
-                <TableHead>Server ID</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {servers.length > 0 ? (
-                servers.map((server) => (
-                  <TableRow key={server.serverId}>
-                    <TableCell className="font-medium">{server.name || 'Unnamed Agent'}</TableCell>
-                    <TableCell><ServerStatusBadge status={server.status} /></TableCell>
-                    <TableCell>{server.agentVersion || 'N/A'}</TableCell>
-                    <TableCell className="font-mono text-xs">{server.serverId}</TableCell>
-                  </TableRow>
-                ))
-              ) : (
+          {loading ? (
+             <div className="space-y-2">
+                <Skeleton className="h-10 w-full" />
+                <Skeleton className="h-10 w-full" />
+             </div>
+          ) : (
+            <Table>
+              <TableHeader>
                 <TableRow>
-                  <TableCell colSpan={4} className="text-center h-24">
-                    You haven't connected any servers yet.
-                  </TableCell>
+                  <TableHead>Name</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Agent Version</TableHead>
+                  <TableHead>Server ID</TableHead>
                 </TableRow>
-              )}
-            </TableBody>
-          </Table>
+              </TableHeader>
+              <TableBody>
+                {servers.length > 0 ? (
+                  servers.map((server) => (
+                    <TableRow key={server.serverId}>
+                      <TableCell className="font-medium">{server.name || 'Unnamed Agent'}</TableCell>
+                      <TableCell><ServerStatusBadge status={server.status} /></TableCell>
+                      <TableCell>{server.agentVersion || 'N/A'}</TableCell>
+                      <TableCell className="font-mono text-xs">{server.serverId}</TableCell>
+                    </TableRow>
+                  ))
+                ) : (
+                  <TableRow>
+                    <TableCell colSpan={4} className="text-center h-24">
+                      You haven't connected any servers yet.
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          )}
         </CardContent>
       </Card>
     </div>
   );
+}
+
+
+export default function SettingsPage() {
+    return (
+        <ProtectedRoute>
+            <Settings />
+        </ProtectedRoute>
+    )
 }
