@@ -11,9 +11,11 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Skeleton } from '@/components/ui/skeleton';
-import { PlusCircle } from 'lucide-react';
+import { PlusCircle, Link2 } from 'lucide-react';
 import { useAuthUser } from '@/hooks/useAuthUser';
 import ProtectedRoute from '@/components/ProtectedRoute';
+import ServerConnectForm from '@/components/ServerConnectForm';
+import { Separator } from '@/components/ui/separator';
 
 function ServerStatusBadge({ status }: { status: ServerDoc['status'] }) {
     const variant = status === 'linked' ? 'default' : status === 'pending' ? 'secondary' : 'destructive';
@@ -40,34 +42,33 @@ function Settings() {
 
       return () => unsubscribe();
     } else {
-        // If there's no user, we're not loading data, so set loading to false.
-        // This can happen if the user signs out.
         setLoading(false);
-        setServers([]); // Clear servers on sign out
+        setServers([]);
     }
   }, [user]);
 
-  // We rely on the ProtectedRoute to handle the loading state until user is determined.
-  // The internal loading is for the Firestore query.
   if (!user) return null;
 
-
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       <div className="flex items-center justify-between">
         <h1 className="font-headline text-4xl font-bold tracking-tight">Settings</h1>
-        <Button asChild>
-          <Link href="/settings/connect">
-            <PlusCircle className="mr-2 h-4 w-4" />
-            Connect New Server
-          </Link>
-        </Button>
       </div>
       
       <Card>
         <CardHeader>
-          <CardTitle>Your Servers</CardTitle>
-          <CardDescription>A list of your connected media servers.</CardDescription>
+          <div className='flex items-center justify-between'>
+            <div>
+              <CardTitle>Agent-Based Servers</CardTitle>
+              <CardDescription>A list of your connected media servers using claim tokens.</CardDescription>
+            </div>
+            <Button asChild>
+              <Link href="/settings/connect">
+                <PlusCircle className="mr-2 h-4 w-4" />
+                Connect New Server
+              </Link>
+            </Button>
+          </div>
         </CardHeader>
         <CardContent>
           {loading ? (
@@ -98,7 +99,7 @@ function Settings() {
                 ) : (
                   <TableRow>
                     <TableCell colSpan={4} className="text-center h-24">
-                      You haven't connected any servers yet.
+                      You haven't connected any agent-based servers yet.
                     </TableCell>
                   </TableRow>
                 )}
@@ -107,10 +108,17 @@ function Settings() {
           )}
         </CardContent>
       </Card>
+
+      <div className="relative">
+        <Separator />
+        <span className="absolute left-1/2 -translate-x-1/2 -top-3 bg-background px-2 text-sm text-muted-foreground">OR</span>
+      </div>
+
+      <ServerConnectForm />
+
     </div>
   );
 }
-
 
 export default function SettingsPage() {
     return (
