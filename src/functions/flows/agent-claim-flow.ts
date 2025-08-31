@@ -1,6 +1,7 @@
-
+// src/functions/flows/agent-claim-flow.ts
 import * as crypto from 'crypto';
-import * as admin from 'firebase-admin';
+import { promisify } from 'util';
+import { admin, db } from '../lib/admin';
 
 type ClaimInput = {
   claimPublicId: string;
@@ -10,41 +11,45 @@ type ClaimInput = {
   requesterIp?: string | null;
 };
 
-const db = admin.firestore();
+const scryptAsync = promisify(crypto.scrypt);
 
 /**
- * Performs a constant-time comparison of two hex strings to prevent timing attacks.
+ * Constant-time HMAC verification of (claimPublicId:claimSecret) using server secret.
+ * Prevents timing attacks and avoids leaking length differences.
  */
-function hmacValid(pub: string, sec: string, secret: string, expectedHex: string) {
+function hmacValid(pub: string, sec: string, secret: string, expectedHex: string): boolean {
   const h = crypto.createHmac('sha256', secret);
   h.update(`${pub}:${sec}`);
-  const sig = h.digest('hex');
+  const sigHex = h.digest('hex');
 
-  // Ensure buffers have the same length to prevent length-leakage.
-  const expectedBuffer = Buffer.from(expectedHex, 'hex');
-  if (sig.length !== expectedBuffer.length) {
-    // To mitigate timing attacks, we can perform a dummy comparison on a buffer of the same size.
-    // This is arguably overkill if the attacker cannot control the length of expectedHex,
-    // but it's a good practice.
-    crypto.timingSafeEqual(Buffer.from(sig, 'hex'), Buffer.alloc(expectedBuffer.length));
+  const expected = Buffer.from(expectedHex, 'hex');
+  const actual = Buffer.from(sigHex, 'hex');
+
+  // If lengths differ, compare against a zeroed buffer of expected length to equalize timing.
+  if (actual.length !== expected.length) {
+    try {
+      crypto.timingSafeEqual(Buffer.alloc(expected.length, 0), expected);
+    } catch {
+      /* noop — just equalize timing */
+    }
     return false;
   }
-  
-  return crypto.timingSafeEqual(Buffer.from(sig, 'hex'), expectedBuffer);
+  return crypto.timingSafeEqual(actual, expected);
 }
-
 
 export async function agentClaimFlow(input: ClaimInput) {
   const { claimPublicId, claimSecret, agentName, agentVersion, requesterIp } = input;
+
   const hmacSecret = process.env.HMAC_SECRET;
   if (!hmacSecret) {
-    console.error('HMAC_SECRET environment variable is not set.');
-    throw new Error('Server configuration error.');
+    const err: any = new Error('Server configuration error: HMAC_SECRET is not set.');
+    err.code = 'failed-precondition';
+    throw err;
   }
 
-  // 1. Find the pending server doc by its public claim ID. This is a collectionGroup
-  // query because we don't know the user's UID.
-  const q = await db.collectionGroup('servers')
+  // 1) Locate pending server by claimPublicId (unknown owner, so use collectionGroup)
+  const q = await db
+    .collectionGroup('servers')
     .where('status', '==', 'pending')
     .where('claimPublicId', '==', claimPublicId)
     .limit(1)
@@ -52,7 +57,8 @@ export async function agentClaimFlow(input: ClaimInput) {
 
   if (q.empty) {
     const err: any = new Error('Invalid or already used claim token.');
-    err.code = 'permission-denied'; // Use 403 to avoid leaking existence info
+    // 403 prevents leaking existence of tokens
+    err.code = 'permission-denied';
     throw err;
   }
 
@@ -60,56 +66,53 @@ export async function agentClaimFlow(input: ClaimInput) {
   const serverRef = snap.ref;
   const serverData = snap.data() as any;
 
-  // 2. Security Check: Verify the HMAC signature.
-  const signatureOk = hmacValid(claimPublicId, claimSecret, hmacSecret, serverData.claimSignature);
-  if (!signatureOk) {
+  // 2) Verify HMAC signature
+  const ok = hmacValid(claimPublicId, claimSecret, hmacSecret, serverData.claimSignature);
+  if (!ok) {
     const err: any = new Error('Invalid claim token signature.');
     err.code = 'permission-denied';
     throw err;
   }
 
-  // 3. Security Check: Ensure the token has not expired.
-  const expiresAt = serverData.expiresAt?.toDate?.() ?? null;
+  // 3) TTL check
+  const expiresAt: Date | null = serverData.expiresAt?.toDate?.() ?? null;
   if (!expiresAt || expiresAt.getTime() <= Date.now()) {
     const err: any = new Error('This claim token has expired.');
-    err.code = 'failed-precondition'; // Maps to 410 Gone
+    // Your HTTP wrapper maps this to 410 Gone
+    err.code = 'failed-precondition';
     throw err;
   }
 
-  // 4. Security Check: Ensure the token hasn't already been used.
+  // 4) Single-use check
   if (serverData.status !== 'pending') {
     const err: any = new Error('This claim token has already been used.');
-    err.code = 'already-exists'; // Maps to 409 Conflict
+    err.code = 'already-exists'; // 409 Conflict
     throw err;
   }
 
-  // 5. Generate and hash the permanent agent API key.
+  // 5) Generate permanent agent API key and hash with scrypt
   const agentApiKey = crypto.randomBytes(32).toString('hex');
   const salt = crypto.randomBytes(16).toString('hex');
-  const scryptHash = await new Promise<string>((resolve, reject) => {
-    crypto.scrypt(agentApiKey, salt, 64, (err, derivedKey) => {
-      if (err) return reject(err);
-      resolve((derivedKey as Buffer).toString('hex'));
-    });
-  });
+  const derived = (await scryptAsync(agentApiKey, salt, 64)) as Buffer;
+  const apiKeyHash = derived.toString('hex');
 
-  // 6. Atomically update the server document to its 'linked' state.
+  // 6) Atomically update server doc to 'linked' and clear temp fields
   await serverRef.update({
     status: 'linked',
     name: agentName ?? 'New Agent',
-    apiKeyHash: scryptHash,
-    salt,
-    ip: requesterIp ?? null,
     agentVersion: agentVersion ?? null,
+    ip: requesterIp ?? null,
+    apiKeyHash,
+    salt,
     linkedAt: admin.firestore.FieldValue.serverTimestamp(),
-    // Clear temporary claim fields
+    // Invalidate token
     claimPublicId: null,
     claimSignature: null,
     expiresAt: null,
   });
-  
-  const serverId = serverData.serverId || serverRef.id;
 
-  // 7. Return the plaintext API key ONCE. The agent must store this securely.
+  const serverId: string = serverData.serverId || serverRef.id;
+
+  // 7) Return the plaintext API key ONCE (agent must store securely)
   return { agentApiKey, serverId };
 }
