@@ -1,0 +1,51 @@
+name: Build Studio Bundle (manual)
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  bundle:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Create a clean folder with ONLY the front-end bits Studio should own.
+      # We intentionally EXCLUDE backend (src/functions) and CI files.
+      - name: Prepare bundle
+        run: |
+          mkdir -p studio-bundle
+          # Core config
+          cp -f package.json studio-bundle/ || true
+          cp -f package-lock.json studio-bundle/ || true
+          cp -f tsconfig.json studio-bundle/ || true
+          cp -f next.config.js studio-bundle/ || true
+          cp -f turbo.json studio-bundle/ || true
+          cp -f postcss.config.js studio-bundle/ || true
+          cp -f tailwind.config.js studio-bundle/ || true
+          cp -f firebase.json studio-bundle/ || true
+          cp -f .firebaserc studio-bundle/ || true
+          # Front-end source
+          mkdir -p studio-bundle/src
+          rsync -a --exclude "functions" src/ studio-bundle/src/
+          # Public assets
+          if [ -d public ]; then rsync -a public studio-bundle/; fi
+          # Lock guardrails in the bundle
+          cat > studio-bundle/STUDIO_GUARDRAILS.md <<'MD'
+          # Studio Guardrails
+          - Do NOT create/edit/move/delete anything under `src/functions/*` or `.github/workflows/*`.
+          - All Cloud Functions are deployed from GitHub Actions.
+          - Studio is used for front-end edits, preview, and UI iteration only.
+          MD
+
+      - name: Zip bundle
+        run: |
+          cd studio-bundle
+          zip -r ../studio-bundle.zip .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: studio-bundle
+          path: studio-bundle.zip
+          retention-days: 7
