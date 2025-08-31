@@ -1,14 +1,12 @@
-
-import * as admin from "firebase-admin";
+// src/functions/flows/playback-report-flow.ts
 import { z } from "zod";
-
-const db = admin.firestore();
+import { admin, db } from "../lib/admin";
 
 const ReportSchema = z.object({
   mediaId: z.string().min(1),
   position: z.number().min(0),
   duration: z.number().positive(),
-  finished: z.boolean().optional()
+  finished: z.boolean().optional(),
 });
 
 export type ReportInput = z.infer<typeof ReportSchema>;
@@ -46,7 +44,7 @@ export async function playbackReportFlow(uid: string, body: unknown) {
           mediaId,
           lastPosition: position,
           duration,
-          lastPlayedAt: now
+          lastPlayedAt: now,
         },
         { merge: true }
       );
@@ -54,19 +52,21 @@ export async function playbackReportFlow(uid: string, body: unknown) {
     }
 
     const mediaData = mediaSnap.data() || {};
-    const canIncrement =
-      !mediaData.lastFinishedAt ||
-      (mediaData.lastFinishedAt.toMillis?.() ?? 0) < Date.now() - 60_000;
+    const lastFinishedAtTs = mediaData.lastFinishedAt?.toMillis?.() as number | undefined;
+
+    // Prevent rapid double-increments (allow +1 at most once per minute)
+    const canIncrement = !lastFinishedAtTs || lastFinishedAtTs < Date.now() - 60_000;
 
     if (canIncrement) {
       tx.update(mediaRef, {
         playCount: admin.firestore.FieldValue.increment(1),
-        lastFinishedAt: now
+        lastFinishedAt: now,
       });
     } else {
       tx.update(mediaRef, { lastFinishedAt: now });
     }
 
+    // Clear progress once finished
     tx.delete(pbRef);
   });
 
