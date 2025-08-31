@@ -2,6 +2,7 @@
   "name": "watchtime-functions",
   "private": true,
   "engines": { "node": "20" },
+  "type": "commonjs",
   "main": "lib/index.js",
   "scripts": {
     "clean": "rimraf lib",
@@ -10,10 +11,8 @@
   },
   "dependencies": {
     "firebase-admin": "^12.5.0",
-    "firebase-functions": "^5.0.1",
+    "firebase-functions": "^5.1.1",
     "cors": "^2.8.5",
-    "@genkit-ai/core": "^0.8.0",
-    "@genkit-ai/firebase": "^0.8.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {
