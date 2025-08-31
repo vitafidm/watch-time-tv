@@ -1,17 +1,12 @@
 
 import * as functions from 'firebase-functions';
-import * as admin from 'firebase-admin';
+import { admin } from './lib/admin';
 import cors from 'cors';
 import { createClaimTokenFlow } from './flows/claim-token-flow';
 import { agentClaimFlow } from './flows/agent-claim-flow';
 import { agentIngestFlow } from './flows/agent-ingest-flow';
 import { playbackReportFlow } from './flows/playback-report-flow';
 import { tmdbEnrichFlow, tmdbBackfillSweep } from "./flows/tmdb-enrich-flow";
-
-// Initialize Firebase Admin SDK
-if (!admin.apps.length) {
-  admin.initializeApp();
-}
 
 const corsHandler = cors({ origin: true });
 
