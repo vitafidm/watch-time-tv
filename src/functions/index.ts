@@ -1,7 +1,7 @@
 
 import * as functions from 'firebase-functions';
 import * as admin from 'firebase-admin';
-import * as cors from 'cors';
+import cors from 'cors';
 import { createClaimTokenFlow } from './flows/claim-token-flow';
 import { agentClaimFlow } from './flows/agent-claim-flow';
 import { agentIngestFlow } from './flows/agent-ingest-flow';
