@@ -3,8 +3,8 @@ import * as crypto from "crypto";
 import { z } from "zod";
 import { admin, db } from "../lib/admin";
 
-type MediaKind = "movie" | "tv";           // TMDB kinds
-type IngestMediaType = "movie" | "episode"; // What the agent/app sends
+type MediaKind = "movie" | "tv";            // TMDB kinds
+type IngestMediaType = "movie" | "episode"; // Agent/app input kinds
 
 const TMDB_BASE = "https://api.themoviedb.org/3";
 const IMG_BASE = "https://image.tmdb.org/t/p/original";
@@ -26,7 +26,7 @@ type EnrichBody = z.infer<typeof EnrichBodySchema>;
 
 type CacheDoc = {
   tmdbId: number;
-  tmdbType: MediaKind; // "movie" | "tv"
+  tmdbType: MediaKind;
   overview?: string | null;
   genres?: string[] | null;
   releaseDate?: string | null;
@@ -39,7 +39,6 @@ type CacheDoc = {
 };
 
 function toMediaKind(type: IngestMediaType): MediaKind {
-  // episodes map to tv searches/details
   return type === "episode" ? "tv" : "movie";
 }
 
@@ -88,7 +87,6 @@ async function tmdbDetails(apiKey: string, tmdbType: MediaKind, id: number) {
 }
 
 export async function tmdbEnrichFlow(uid: string, rawBody: unknown) {
-  // Validate body
   const parsed = EnrichBodySchema.safeParse(rawBody);
   if (!parsed.success) {
     const e = new Error(JSON.stringify(parsed.error.issues));
@@ -105,7 +103,7 @@ export async function tmdbEnrichFlow(uid: string, rawBody: unknown) {
 
   const { items } = parsed.data as EnrichBody;
 
-  // Lightweight per-user rate limit (1 call / 10s)
+  // Per-user rate limit: 1 call / 10s
   const rateRef = db.doc(`users/${uid}/integrations_meta/tmdbRateLimit`);
   const rateSnap = await rateRef.get();
   const nowMs = Date.now();
@@ -141,7 +139,7 @@ export async function tmdbEnrichFlow(uid: string, rawBody: unknown) {
     }
     const media = mediaSnap.data() || {};
 
-    // If already enriched with images, skip
+    // Skip if already enriched (has id + images)
     if (media.tmdbId && (media.posterUrl || media.backdropUrl)) {
       results.push({ mediaId: it.mediaId, status: "skipped" });
       continue;
@@ -171,7 +169,7 @@ export async function tmdbEnrichFlow(uid: string, rawBody: unknown) {
         }
 
         const genres = (details.genres || []).map((g: any) => g.name).filter(Boolean);
-        const overview = details.overview || null;
+        const overview = details.overview ?? null;
         const posterPath = details.poster_path ?? null;
         const backdropPath = details.backdrop_path ?? null;
         const releaseDate = details.release_date ?? null;
@@ -179,7 +177,6 @@ export async function tmdbEnrichFlow(uid: string, rawBody: unknown) {
         const voteAverage = typeof details.vote_average === "number" ? details.vote_average : null;
         const language = details.original_language ?? null;
 
-        // Write/refresh cache doc (concrete object; not null)
         cached = {
           tmdbId: Number(details.id),
           tmdbType: search.tmdbType,
@@ -196,7 +193,6 @@ export async function tmdbEnrichFlow(uid: string, rawBody: unknown) {
         await cacheRef.set(cached, { merge: true });
       }
 
-      // Prepare upsert payload for media
       const payload = {
         tmdbId: cached.tmdbId,
         tmdbType: cached.tmdbType,
@@ -227,7 +223,6 @@ export async function tmdbEnrichFlow(uid: string, rawBody: unknown) {
 
 // Scheduled sweep for missing metadata
 export async function tmdbBackfillSweep() {
-  // Find media docs missing tmdbId and group by owner (users/{uid}/media/{mediaId})
   const snap = await db
     .collectionGroup("media")
     .where("tmdbId", "==", null)
@@ -240,12 +235,10 @@ export async function tmdbBackfillSweep() {
   > = {};
 
   for (const d of snap.docs) {
-    const path = d.ref.path; // users/{uid}/media/{mediaId}
-    const segs = path.split("/");
+    const segs = d.ref.path.split("/"); // users/{uid}/media/{mediaId}
     const uid = segs[1];
     const m = d.data() as any;
     if (!uid || !m) continue;
-
     const type: IngestMediaType = m.type === "episode" ? "episode" : "movie";
     const title = m.title || m.filename || "unknown";
     const year = m.year;
@@ -256,8 +249,7 @@ export async function tmdbBackfillSweep() {
     const chunk = items.slice(0, 50);
     try {
       await tmdbEnrichFlow(uid, { items: chunk });
-      // soft spacing between owners
-      await new Promise((r) => setTimeout(r, 1000));
+      await new Promise((r) => setTimeout(r, 1000)); // soft spacing
     } catch (e: any) {
       console.error(`Skipping backfill for user ${uid} due to error: ${e.message}`);
     }
