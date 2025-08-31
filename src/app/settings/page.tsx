@@ -15,6 +15,7 @@ import { PlusCircle, Link2 } from 'lucide-react';
 import { useAuthUser } from '@/hooks/useAuthUser';
 import ProtectedRoute from '@/components/ProtectedRoute';
 import ServerConnectForm from '@/components/ServerConnectForm';
+import NasActions from '@/components/NasActions';
 import { Separator } from '@/components/ui/separator';
 
 function ServerStatusBadge({ status }: { status: ServerDoc['status'] }) {
@@ -114,7 +115,10 @@ function Settings() {
         <span className="absolute left-1/2 -translate-x-1/2 -top-3 bg-background px-2 text-sm text-muted-foreground">OR</span>
       </div>
 
-      <ServerConnectForm />
+      <div className="grid md:grid-cols-2 gap-8 items-start">
+        <ServerConnectForm />
+        <NasActions />
+      </div>
 
     </div>
   );
