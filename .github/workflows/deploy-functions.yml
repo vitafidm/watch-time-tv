@@ -1,7 +1,7 @@
 name: Deploy Firebase Functions (manual)
 
 on:
-  workflow_dispatch: {}   # manual trigger only — super safe
+  workflow_dispatch: {}
 
 jobs:
   deploy:
@@ -27,7 +27,6 @@ jobs:
         with:
           credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
 
-      # Ensure minimal Firebase config exists (Studio may already have these)
       - name: Ensure firebase config files
         run: |
           test -f firebase.json || cat > firebase.json <<'JSON'
@@ -37,7 +36,6 @@ jobs:
           { "projects": { "default": "${{ secrets.FIREBASE_PROJECT_ID }}" } }
           JSON
 
-      # Provide env that your functions read via process.env.*
       - name: Write .env for functions
         run: |
           cat > .env <<'ENV'
@@ -45,9 +43,25 @@ jobs:
           TMDB_API_KEY=${{ secrets.TMDB_API_KEY }}
           ENV
 
-      - name: Install dependencies
+      # ---- NEW: install & build INSIDE functions folder ----
+      - name: Install functions deps
+        working-directory: src/functions
         run: |
           npm ci || npm install
+
+      - name: Build functions (ts -> lib)
+        working-directory: src/functions
+        run: npm run build
+
+      - name: Verify build output exists
+        run: |
+          ls -la src/functions/lib || true
+          test -f src/functions/lib/index.js
+
+      # Optionally update firebase-functions to latest if you want to silence warning:
+      # - name: (Optional) Update firebase-functions
+      #   working-directory: src/functions
+      #   run: npm i firebase-functions@latest --save
 
       - name: Deploy ONLY functions
         run: firebase deploy --only functions --project ${{ secrets.FIREBASE_PROJECT_ID }}
