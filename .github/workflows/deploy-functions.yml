@@ -25,7 +25,8 @@ jobs:
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
-          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          # Make sure this secret contains the *JSON key* for your deployer service account
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
 
       - name: Ensure firebase config files
         run: |
@@ -36,14 +37,16 @@ jobs:
           { "projects": { "default": "${{ secrets.FIREBASE_PROJECT_ID }}" } }
           JSON
 
+      # ⬇️ Write .env where Functions actually reads it
       - name: Write .env for functions
         run: |
-          cat > .env <<'ENV'
+          mkdir -p src/functions
+          cat > src/functions/.env <<'ENV'
           HMAC_SECRET=${{ secrets.HMAC_SECRET }}
           TMDB_API_KEY=${{ secrets.TMDB_API_KEY }}
           ENV
 
-      # Install & build INSIDE functions folder (use npm install, not ci)
+      # Install & build INSIDE functions folder
       - name: Install functions deps
         working-directory: src/functions
         run: npm install --no-audit --no-fund
