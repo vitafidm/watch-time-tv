@@ -1,0 +1,56 @@
+name: Deploy Firebase Functions (manual)
+
+on:
+  workflow_dispatch: {}   # manual trigger only — super safe
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Firebase CLI
+        run: npm i -g firebase-tools
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+
+      # Ensure minimal Firebase config exists (Studio may already have these)
+      - name: Ensure firebase config files
+        run: |
+          test -f firebase.json || cat > firebase.json <<'JSON'
+          { "functions": { "source": "src/functions", "runtime": "nodejs20" } }
+          JSON
+          test -f .firebaserc || cat > .firebaserc <<'JSON'
+          { "projects": { "default": "${{ secrets.FIREBASE_PROJECT_ID }}" } }
+          JSON
+
+      # Provide env that your functions read via process.env.*
+      - name: Write .env for functions
+        run: |
+          cat > .env <<'ENV'
+          HMAC_SECRET=${{ secrets.HMAC_SECRET }}
+          TMDB_API_KEY=${{ secrets.TMDB_API_KEY }}
+          ENV
+
+      - name: Install dependencies
+        run: |
+          npm ci || npm install
+
+      - name: Deploy ONLY functions
+        run: firebase deploy --only functions --project ${{ secrets.FIREBASE_PROJECT_ID }}
+
+      - name: List function URLs
+        run: firebase functions:list --project ${{ secrets.FIREBASE_PROJECT_ID }}
