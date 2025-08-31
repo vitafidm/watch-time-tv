@@ -1,7 +1,6 @@
 
 import * as admin from "firebase-admin";
 import * as crypto from "crypto";
-import fetch from "node-fetch";
 import { z } from "zod";
 
 const db = admin.firestore();
