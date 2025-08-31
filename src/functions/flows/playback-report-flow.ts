@@ -25,9 +25,7 @@ export async function playbackReportFlow(uid: string, body: unknown) {
   const finishThreshold = Math.max(1, Math.floor(0.9 * duration)); // 90%
 
   await db.runTransaction(async (tx) => {
-    const pbSnap = await tx.get(pbRef);
     const mediaSnap = await tx.get(mediaRef);
-
     if (!mediaSnap.exists) {
       const e = new Error("Media not found.");
       (e as any).code = "failed-precondition";
@@ -53,9 +51,7 @@ export async function playbackReportFlow(uid: string, body: unknown) {
 
     const mediaData = mediaSnap.data() || {};
     const lastFinishedAtTs = mediaData.lastFinishedAt?.toMillis?.() as number | undefined;
-
-    // Prevent rapid double-increments (allow +1 at most once per minute)
-    const canIncrement = !lastFinishedAtTs || lastFinishedAtTs < Date.now() - 60_000;
+    const canIncrement = !lastFinishedAtTs || lastFinishedAtTs < Date.now() - 60_000; // once/min
 
     if (canIncrement) {
       tx.update(mediaRef, {
@@ -66,8 +62,7 @@ export async function playbackReportFlow(uid: string, body: unknown) {
       tx.update(mediaRef, { lastFinishedAt: now });
     }
 
-    // Clear progress once finished
-    tx.delete(pbRef);
+    tx.delete(pbRef); // clear progress when finished
   });
 
   return { ok: true };
