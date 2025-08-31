@@ -43,11 +43,10 @@ jobs:
           TMDB_API_KEY=${{ secrets.TMDB_API_KEY }}
           ENV
 
-      # ---- NEW: install & build INSIDE functions folder ----
+      # Install & build INSIDE functions folder (use npm install, not ci)
       - name: Install functions deps
         working-directory: src/functions
-        run: |
-          npm ci || npm install
+        run: npm install --no-audit --no-fund
 
       - name: Build functions (ts -> lib)
         working-directory: src/functions
@@ -57,11 +56,6 @@ jobs:
         run: |
           ls -la src/functions/lib || true
           test -f src/functions/lib/index.js
-
-      # Optionally update firebase-functions to latest if you want to silence warning:
-      # - name: (Optional) Update firebase-functions
-      #   working-directory: src/functions
-      #   run: npm i firebase-functions@latest --save
 
       - name: Deploy ONLY functions
         run: firebase deploy --only functions --project ${{ secrets.FIREBASE_PROJECT_ID }}
