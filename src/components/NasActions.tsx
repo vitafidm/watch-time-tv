@@ -1,15 +1,21 @@
 "use client";
 
 import { useState } from "react";
-import { useServerConfig } from "@/lib/hooks/useServerConfig";
+import { useServerConfig } from "@/hooks/useServerConfig";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { useToast } from "@/hooks/use-toast";
+import {
+  Card,
+  CardHeader,
+  CardTitle,
+  CardDescription,
+  CardContent,
+} from "@/components/ui/card";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Wifi, ScanLine, UploadCloud, RefreshCw, AlertCircle } from "lucide-react";
-import { Alert, AlertDescription, AlertTitle } from "./ui/alert";
+import { useToast } from "@/hooks/use-toast";
 
 function cleanBaseUrl(s?: string) {
-  return (s || "").replace(/\/+$/,'');
+  return (s || "").replace(/\/+$/, "");
 }
 
 type Msg = { kind: "ok" | "err"; text: React.ReactNode };
@@ -26,15 +32,27 @@ export default function NasActions() {
 
   async function hit(path: string, init?: RequestInit) {
     const url = `${base}${path}`;
-    const r = await fetch(url, { method: "GET", ...(init || {}), headers: { "Content-Type": "application/json", ...(init?.headers || {}) } });
+    const r = await fetch(url, {
+      method: "GET",
+      ...(init || {}),
+      headers: {
+        "Content-Type": "application/json",
+        ...(init?.headers || {}),
+      },
+    });
     const t = await r.text();
     let body: any = null;
-    try { body = t ? JSON.parse(t) : null; } catch { body = { raw: t }; }
+    try {
+      body = t ? JSON.parse(t) : null;
+    } catch {
+      body = { raw: t };
+    }
     return { ok: r.ok, status: r.status, body, url };
   }
 
   async function onHealth() {
-    setBusy("health"); setMsg(null);
+    setBusy("health");
+    setMsg(null);
     try {
       const res = await hit("/health");
       if (!res.ok) throw new Error(`Health check failed with status ${res.status}`);
@@ -49,7 +67,8 @@ export default function NasActions() {
   }
 
   async function onScan() {
-    setBusy("scan"); setMsg(null);
+    setBusy("scan");
+    setMsg(null);
     try {
       const res = await hit("/scan", { method: "POST" });
       if (!res.ok) throw new Error(`HTTP ${res.status}: ${JSON.stringify(res.body)}`);
@@ -65,16 +84,26 @@ export default function NasActions() {
   }
 
   async function onPush() {
-    setBusy("push"); setMsg(null);
+    setBusy("push");
+    setMsg(null);
     try {
       const res = await hit("/push", { method: "POST" });
       if (!res.ok) throw new Error(`HTTP ${res.status}: ${JSON.stringify(res.body)}`);
       const status = res.body?.status ?? 200;
       const results = res.body?.body?.results;
       const summary = Array.isArray(results)
-        ? `${results.length} items processed, ${results.filter((r:any)=>r.status==="upserted").length} upserted.`
+        ? `${results.length} items processed, ${results.filter((r: any) => r.status === "upserted").length} upserted.`
         : "no per-item detail available.";
-      setMsg({ kind: "ok", text: <>✅ Push to Firestore finished.<br/>Function status: {status} ({summary})</> });
+      setMsg({
+        kind: "ok",
+        text: (
+          <>
+            ✅ Push to Firestore finished.
+            <br />
+            Function status: {status} ({summary})
+          </>
+        ),
+      });
       toast({ title: "Sync Complete", description: summary });
     } catch (e: any) {
       setMsg({ kind: "err", text: `❌ Sync failed: ${e?.message || e}` });
@@ -88,37 +117,35 @@ export default function NasActions() {
     <Card>
       <CardHeader>
         <CardTitle>NAS Actions</CardTitle>
-        <CardDescription>
-          Manually trigger actions on your connected Direct NAS backend.
-        </CardDescription>
+        <CardDescription>Manually trigger actions on your connected Direct NAS backend.</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="flex gap-2 flex-wrap">
           <Button disabled={isDisabled} onClick={onHealth}>
-            {busy === "health" ? <RefreshCw className="animate-spin" /> : <Wifi />}
+            {busy === "health" ? <RefreshCw className="mr-2 h-4 w-4 animate-spin" /> : <Wifi className="mr-2 h-4 w-4" />}
             {busy === "health" ? "Checking…" : "Test Connection"}
           </Button>
           <Button disabled={isDisabled} onClick={onScan}>
-            {busy === "scan" ? <RefreshCw className="animate-spin" /> : <ScanLine />}
+            {busy === "scan" ? <RefreshCw className="mr-2 h-4 w-4 animate-spin" /> : <ScanLine className="mr-2 h-4 w-4" />}
             {busy === "scan" ? "Scanning…" : "Scan Catalog"}
-          </button>
+          </Button>
           <Button disabled={isDisabled} onClick={onPush}>
-            {busy === "push" ? <RefreshCw className="animate-spin" /> : <UploadCloud />}
+            {busy === "push" ? <RefreshCw className="mr-2 h-4 w-4 animate-spin" /> : <UploadCloud className="mr-2 h-4 w-4" />}
             {busy === "push" ? "Syncing…" : "Sync to Firestore"}
           </Button>
         </div>
 
-        {disabled && !isBusy && (
-          <p className="text-sm text-muted-foreground">Save a valid Backend URL in the form above to enable actions.</p>
+        {!base && !isBusy && (
+          <p className="text-sm text-muted-foreground">
+            Save a valid Backend URL in the form above to enable actions.
+          </p>
         )}
-        
+
         {msg && (
           <Alert variant={msg.kind === "ok" ? "default" : "destructive"}>
-             <AlertCircle className="h-4 w-4" />
-             <AlertTitle>{msg.kind === 'ok' ? 'Success' : 'Error'}</AlertTitle>
-             <AlertDescription>
-                {msg.text}
-             </AlertDescription>
+            <AlertCircle className="h-4 w-4" />
+            <AlertTitle>{msg.kind === "ok" ? "Success" : "Error"}</AlertTitle>
+            <AlertDescription>{msg.text}</AlertDescription>
           </Alert>
         )}
       </CardContent>

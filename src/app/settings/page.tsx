@@ -11,7 +11,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Skeleton } from '@/components/ui/skeleton';
-import { PlusCircle, Link2 } from 'lucide-react';
+import { PlusCircle } from 'lucide-react';
 import { useAuthUser } from '@/hooks/useAuthUser';
 import ProtectedRoute from '@/components/ProtectedRoute';
 import ServerConnectForm from '@/components/ServerConnectForm';

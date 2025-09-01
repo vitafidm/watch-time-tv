@@ -2,21 +2,21 @@
 "use client";
 
 import { FormEvent, useState } from "react";
-import { useServerConfig } from "@/lib/hooks/useServerConfig";
+import { useServerConfig } from "@/hooks/useServerConfig";
 import { useAuthUser } from "@/hooks/useAuthUser";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription, AlertTitle } from "./ui/alert";
-import { AlertCircle, Link, Check, RefreshCw } from "lucide-react";
+import { AlertCircle, Check, RefreshCw, Wifi } from "lucide-react";
 import { Skeleton } from "./ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 
 function isValidUrl(s: string) {
   try {
     const u = new URL(s);
-    return !!u.protocol && !!u.host && (u.protocol === "http:" || u.protocol === "https:");
+    return !!u.protocol && !!u.host && (u.protocol === "http:" || u.protocol === "https://:");
   } catch {
     return false;
   }
@@ -77,13 +77,6 @@ export default function ServerConnectForm() {
     } catch (err: any) {
       setError(err?.message ?? "Failed to save settings. Please try again.");
     }
-  }
-
-  const handleTestConnection = () => {
-    toast({
-      title: "Coming Soon!",
-      description: "We'll wire this to a real connection test after the backend is implemented.",
-    });
   }
 
   return (
@@ -151,16 +144,6 @@ export default function ServerConnectForm() {
             <Button type="submit" disabled={saving}>
               {saving ? <RefreshCw className="mr-2 animate-spin" /> : <Check />}
               {saving ? "Saving…" : "Save Settings"}
-            </Button>
-
-            <Button
-              type="button"
-              variant="outline"
-              onClick={handleTestConnection}
-              disabled={saving}
-            >
-              <Link className="mr-2" />
-              Test Connection
             </Button>
           </div>
 
