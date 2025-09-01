@@ -82,6 +82,20 @@ export const agentClaim = functions.https.onRequest(async (req, res) => {
       return;
     }
 
+    // Pre-flight check: Verify Firestore connectivity before proceeding.
+    try {
+      await admin.firestore().listCollections();
+    } catch (dbError: any) {
+      functions.logger.error('Firestore pre-flight check FAILED:', dbError);
+      res.status(500).json({
+        error: {
+          status: 'INTERNAL_CONFIG',
+          message: 'Function failed to connect to the database. Check service account permissions.',
+        },
+      });
+      return; // Stop execution
+    }
+
     try {
       const ip =
         (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ||
