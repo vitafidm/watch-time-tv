@@ -22,15 +22,17 @@ function hmacValid(pub: string, sec: string, secret: string, expectedHex: string
 
   // Ensure buffers have the same length to prevent length-leakage.
   const expectedBuffer = Buffer.from(expectedHex, 'hex');
-  if (sig.length !== expectedBuffer.length) {
+  const sigBuffer = Buffer.from(sig, 'hex');
+  
+  if (sigBuffer.length !== expectedBuffer.length) {
     // To mitigate timing attacks, we can perform a dummy comparison on a buffer of the same size.
     // This is arguably overkill if the attacker cannot control the length of expectedHex,
     // but it's a good practice.
-    crypto.timingSafeEqual(Buffer.from(sig, 'hex'), Buffer.alloc(expectedBuffer.length));
-    return false;
+    crypto.timingSafeEqual(sigBuffer, Buffer.alloc(sigBuffer.length));
+    return false; // Explicitly return false if lengths differ
   }
   
-  return crypto.timingSafeEqual(Buffer.from(sig, 'hex'), expectedBuffer);
+  return crypto.timingSafeEqual(sigBuffer, expectedBuffer);
 }
 
 
