@@ -8,7 +8,7 @@ import { agentIngestFlow } from './flows/agent-ingest-flow';
 import { playbackReportFlow } from './flows/playback-report-flow';
 import { tmdbEnrichFlow, tmdbBackfillSweep } from "./flows/tmdb-enrich-flow";
 
-// Initialize Firebase Admin SDK
+// Initialize Firebase Admin SDK.
 if (!admin.apps.length) {
   admin.initializeApp();
 }
