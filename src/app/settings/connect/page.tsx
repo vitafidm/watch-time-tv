@@ -4,6 +4,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { doc, onSnapshot } from 'firebase/firestore';
 import { db } from '@/lib/firebase.client';
+import { ENV } from '@/lib/env';
 import type { ServerDoc } from '@/lib/db.types';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -22,8 +23,6 @@ interface TokenData {
   claimSecret: string;
   expiresAtISO: string;
 }
-
-const claimTokenUrl = process.env.NEXT_PUBLIC_CLAIM_TOKEN_URL;
 
 function ConnectWizard() {
   const { user } = useAuthUser();
@@ -50,7 +49,7 @@ function ConnectWizard() {
       toast({ title: "Authentication Error", description: "You must be signed in to generate a token.", variant: "destructive" });
       return;
     }
-    if (!claimTokenUrl) {
+    if (!ENV.CLAIM_TOKEN_URL) {
       setError("The claim token URL is not configured by the administrator.");
       setWizardState('error');
       return;
@@ -61,7 +60,7 @@ function ConnectWizard() {
 
     try {
       const idToken = await user.getIdToken(true);
-      const response = await fetch(claimTokenUrl, {
+      const response = await fetch(ENV.CLAIM_TOKEN_URL, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${idToken}`,
@@ -147,8 +146,8 @@ function ConnectWizard() {
 
   const dockerEnvSnippet = `CLAIM_PUBLIC_ID=${tokenData?.claimPublicId || ''}
 CLAIM_SECRET=${tokenData?.claimSecret || ''}
-AGENT_CLAIM_URL=${process.env.NEXT_PUBLIC_AGENT_CLAIM_URL || 'YOUR_AGENT_CLAIM_URL'}
-AGENT_INGEST_URL=${process.env.NEXT_PUBLIC_AGENT_INGEST_URL || 'YOUR_AGENT_INGEST_URL'}`;
+AGENT_CLAIM_URL=${ENV.AGENT_CLAIM_URL || 'YOUR_AGENT_CLAIM_URL'}
+AGENT_INGEST_URL=${ENV.AGENT_INGEST_URL || 'YOUR_AGENT_INGEST_URL'}`;
 
   const formatTime = (ms: number) => {
     const totalSeconds = Math.floor(ms / 1000);
@@ -166,6 +165,9 @@ AGENT_INGEST_URL=${process.env.NEXT_PUBLIC_AGENT_INGEST_URL || 'YOUR_AGENT_INGES
             <h3 className="mt-4 text-lg font-medium">Generate a Claim Token</h3>
             <p className="mt-1 text-sm text-muted-foreground">Click the button to generate a secure, one-time token to link your local media agent.</p>
             <Button onClick={handleGenerateToken} className="mt-6">Generate Token</Button>
+            <p className="text-xs text-muted-foreground mt-4">
+              Function Target: <code className="font-mono bg-muted px-1 py-0.5 rounded">{ENV.CLAIM_TOKEN_URL || "Not configured"}</code>
+            </p>
           </div>
         );
       case 'generating':

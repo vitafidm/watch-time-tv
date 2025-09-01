@@ -13,6 +13,7 @@ import {
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Wifi, ScanLine, UploadCloud, RefreshCw, AlertCircle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { ENV } from "@/lib/env";
 
 function cleanBaseUrl(s?: string) {
   return (s || "").replace(/\/+$/, "");
@@ -117,7 +118,12 @@ export default function NasActions() {
     <Card>
       <CardHeader>
         <CardTitle>NAS Actions</CardTitle>
-        <CardDescription>Manually trigger actions on your connected Direct NAS backend.</CardDescription>
+        <CardDescription>
+          Manually trigger actions on your connected Direct NAS backend.
+          <span className="block text-xs mt-1 text-muted-foreground">
+            Ingest Target: <code className="font-mono bg-muted px-1 py-0.5 rounded">{ENV.AGENT_INGEST_URL || 'not set'}</code>
+          </span>
+        </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="flex gap-2 flex-wrap">
