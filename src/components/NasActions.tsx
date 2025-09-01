@@ -89,12 +89,21 @@ export default function NasActions() {
     setMsg(null);
     try {
       const res = await hit("/push", { method: "POST" });
-      if (!res.ok) throw new Error(`HTTP ${res.status}: ${JSON.stringify(res.body)}`);
-      const status = res.body?.status ?? 200;
+
+      if (res.body?.error) {
+        throw new Error(res.body.error);
+      }
+
+      if (!res.ok) {
+        throw new Error(`Push request failed with status ${res.status}`);
+      }
+      
+      const status = res.body?.status ?? 'N/A';
       const results = res.body?.body?.results;
       const summary = Array.isArray(results)
         ? `${results.length} items processed, ${results.filter((r: any) => r.status === "upserted").length} upserted.`
         : "no per-item detail available.";
+
       setMsg({
         kind: "ok",
         text: (
@@ -106,6 +115,7 @@ export default function NasActions() {
         ),
       });
       toast({ title: "Sync Complete", description: summary });
+
     } catch (e: any) {
       setMsg({ kind: "err", text: `❌ Sync failed: ${e?.message || e}` });
       toast({ title: "Sync Failed", description: e?.message || "Could not sync data to Firestore.", variant: "destructive" });
