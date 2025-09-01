@@ -22,8 +22,8 @@ The emulator will automatically load this variable.
 For your deployed function, you must set the secret in the Google Cloud console:
 
 1.  Go to the [Google Cloud Functions console](https://console.cloud.google.com/functions).
-2.  Select your project and find the `claimToken` function.
-3.  Edit the function and navigate to the "Runtime, build and connections settings" section.
+2.  Select your project and find the `claimToken` and `agentClaim` functions.
+3.  Edit each function and navigate to the "Runtime, build and connections settings" section.
 4.  Under "Runtime environment variables", add a variable named `HMAC_SECRET` with your production secret.
 
 ## Deployment
