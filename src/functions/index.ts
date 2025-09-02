@@ -126,7 +126,10 @@ export const agentClaim = functions.https.onRequest(async (req, res) => {
         res.status(410).json({ error: { status: 'FAILED_PRECONDITION', message: err.message }});
       } else if (code === 'already-exists') {
         res.status(409).json({ error: { status: 'ALREADY_EXISTS', message: err.message }});
-      } else {
+      } else if (err.message === 'Server configuration error.') {
+        res.status(500).json({ error: { status: 'INTERNAL_CONFIG', message: 'A server configuration error occurred. Please check function logs.' } });
+      }
+      else {
         functions.logger.error('agentClaim error', err);
         res.status(500).json({ error: { status: 'INTERNAL', message: 'Internal error' }});
       }
