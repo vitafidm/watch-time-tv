@@ -1,4 +1,20 @@
+
 {
-  "indexes": [],
+  "indexes": [
+    {
+      "collectionGroup": "servers",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        {
+          "fieldPath": "claimPublicId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "status",
+          "order": "ASCENDING"
+        }
+      ]
+    }
+  ],
   "fieldOverrides": []
 }
