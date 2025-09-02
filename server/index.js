@@ -17,11 +17,23 @@
  * - TV_PATH: The absolute path to the TV shows directory to scan.
  * - AGENT_INGEST_URL: The URL of the deployed `agentIngest` Firebase Function.
  * - AGENT_API_KEY: The permanent API key obtained from the `agentClaim` flow.
+ *
+ * ---
+ * HOW TO USE:
+ * 1. Start this server in a terminal: `node server/index.js`
+ * 2. In a NEW terminal, set the required environment variables:
+ *    export AGENT_INGEST_URL="https://us-central1-watchtimetv2.cloudfunctions.net/agentIngest"
+ *    export AGENT_API_KEY="<PASTE THE AGENT_API_KEY YOU JUST RECEIVED>"
+ *    export MOVIES_PATH="./path/to/your/mock/movies" // Create these mock folders
+ *    export TV_PATH="./path/to/your/mock/tv"
+ * 3. Test the connection to the ingest function:
+ *    curl -X POST http://localhost:4000/push
  */
 const http = require('http');
 const fs = require('fs/promises');
 const path = require('path');
 const { URL } = require('url');
+
 const fetch = require('node-fetch');
 
 const PORT = process.env.PORT || 4000;
@@ -122,7 +134,7 @@ const server = http.createServer(async (req, res) => {
     try {
       const { items } = await readCatalog();
       if (!items || items.length === 0) {
-        return sendJSON(res, { status: 200, body: { message: "No items in local catalog to push." } });
+        return sendJSON(res, { status: 200, body: { message: "No items in local catalog to push. Run /scan first." } });
       }
 
       const r = await fetch(AGENT_INGEST_URL, {
