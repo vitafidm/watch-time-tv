@@ -41,7 +41,9 @@ export async function agentClaimFlow(input: ClaimInput) {
   const hmacSecret = process.env.HMAC_SECRET;
   if (!hmacSecret) {
     console.error('HMAC_SECRET environment variable is not set.');
-    throw new Error('Server configuration error.');
+    const err: any = new Error('Server configuration error: HMAC_SECRET is not set.');
+    err.code = 'internal-config'; // Specific code for the handler to catch
+    throw err;
   }
 
   // 1. Find the pending server doc by its public claim ID. This is a collectionGroup
