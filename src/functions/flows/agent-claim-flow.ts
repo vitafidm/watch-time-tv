@@ -62,6 +62,17 @@ export async function agentClaimFlow(input: ClaimInput) {
   const serverRef = snap.ref;
   const serverData = snap.data() as any;
 
+  // **NEW VALIDATION BLOCK**
+  // Add robust checks to prevent crashes from malformed documents.
+  if (!serverData || !serverData.claimSignature || !serverData.expiresAt) {
+    console.error(`Malformed pending server document found for claimPublicId: ${claimPublicId}. Doc path: ${serverRef.path}`);
+    const err: any = new Error('Invalid claim token state. The document is malformed.');
+    err.code = 'permission-denied'; // Treat as invalid token to prevent info leakage
+    throw err;
+  }
+  // **END NEW VALIDATION BLOCK**
+
+
   // 2. Security Check: Verify the HMAC signature.
   const signatureOk = hmacValid(claimPublicId, claimSecret, hmacSecret, serverData.claimSignature);
   if (!signatureOk) {
