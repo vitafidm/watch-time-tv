@@ -86,6 +86,7 @@ async function scanDirectory(dirPath, type) {
             type,
             size: 1, // Mock data
             duration: 1, // Mock data
+            addedAt: new Date().toISOString(), // Add the timestamp here
     }));
   } catch (error) {
     console.warn(`Warning: Could not scan directory ${dirPath}.`, error.message);
