@@ -4,9 +4,8 @@
 import { useMediaByType } from "@/lib/hooks/catalog";
 import { useAuthUser } from "@/hooks/useAuthUser";
 import ProtectedRoute from "@/components/ProtectedRoute";
-import { MediaCard } from "@/components/media-card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Film, Video } from "lucide-react";
+import { Film } from "lucide-react";
 import type { MediaDoc } from "@/lib/db.types";
 import { useMemo } from "react";
 import Image from "next/image";

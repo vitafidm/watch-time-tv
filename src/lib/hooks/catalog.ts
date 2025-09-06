@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useEffect, useState } from "react";
@@ -74,7 +75,7 @@ export function useMediaByType(
     const q = query(
       collection(db, `users/${uid}/media`),
       where("type", "==", type),
-      orderBy("updatedAt", "desc"),
+      orderBy("addedAt", "desc"),
       fbLimit(limitN)
     );
     const unsub = onSnapshot(
