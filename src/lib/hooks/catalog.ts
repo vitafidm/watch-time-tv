@@ -59,7 +59,7 @@ export function useRecentlyAdded(uid: string, limitN = 24): HookState<MediaWithI
 export function useMediaByType(
   uid: string,
   type: "movie" | "episode",
-  limitN = 24
+  limitN = 100
 ): HookState<MediaWithId> {
   const [state, setState] = useState<HookState<MediaWithId>>({
     data: [],
@@ -75,7 +75,7 @@ export function useMediaByType(
     const q = query(
       collection(db, `users/${uid}/media`),
       where("type", "==", type),
-      orderBy("addedAt", "desc"),
+      orderBy("title", "asc"),
       fbLimit(limitN)
     );
     const unsub = onSnapshot(
