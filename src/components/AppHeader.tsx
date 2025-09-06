@@ -1,6 +1,7 @@
+
 "use client"
 
-import { Search, LogOut, Settings, LogIn } from "lucide-react";
+import { Search, LogOut, Settings, LogIn, Film, Tv } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { useSearch } from "@/hooks/use-search";
 import { Button } from "./ui/button";
@@ -50,6 +51,13 @@ export function AppHeader() {
                 {user ? (
                     <>
                         <DropdownMenuLabel>{user.email}</DropdownMenuLabel>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem asChild>
+                            <Link href="/movies/library"><Film className="mr-2 h-4 w-4" />Movie Library</Link>
+                        </DropdownMenuItem>
+                        <DropdownMenuItem asChild>
+                            <Link href="/television/library"><Tv className="mr-2 h-4 w-4" />TV Library</Link>
+                        </DropdownMenuItem>
                         <DropdownMenuSeparator />
                         <DropdownMenuItem asChild>
                             <Link href="/settings"><Settings className="mr-2 h-4 w-4" />Settings</Link>
