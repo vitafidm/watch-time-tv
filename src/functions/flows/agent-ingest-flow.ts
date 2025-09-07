@@ -5,6 +5,38 @@ import { z } from 'zod';
 
 const db = admin.firestore();
 
+// -------- NEW: robust coercion to Firestore Timestamp --------
+function toTimestamp(v: unknown): admin.firestore.Timestamp {
+  try {
+    if (v == null) return admin.firestore.Timestamp.now();
+    // already a Firestore Timestamp
+    if (v instanceof (admin.firestore as any).Timestamp) {
+      return v as admin.firestore.Timestamp;
+    }
+    if (typeof v === 'number') {
+      // treat as millis since epoch
+      return admin.firestore.Timestamp.fromMillis(v);
+    }
+    if (typeof v === 'string') {
+      // ISO 8601, or any Date-parsable string
+      const d = new Date(v);
+      if (!isNaN(d.getTime())) return admin.firestore.Timestamp.fromDate(d);
+      // fallback
+      return admin.firestore.Timestamp.now();
+    }
+    // objects that expose .toDate()
+    // @ts-ignore
+    if (typeof v?.toDate === 'function') {
+      // @ts-ignore
+      const d = v.toDate();
+      if (d instanceof Date && !isNaN(d.getTime())) {
+        return admin.firestore.Timestamp.fromDate(d);
+      }
+    }
+  } catch { /* noop */ }
+  return admin.firestore.Timestamp.now();
+}
+
 // Zod schema for a single media item in the ingest payload.
 const MediaItemSchema = z.object({
   mediaId: z.string().min(1).optional(),
@@ -21,7 +53,8 @@ const MediaItemSchema = z.object({
   posterUrl: z.string().url().optional(),
   backdropUrl: z.string().url().optional(),
   tmdbId: z.number().int().optional(),
-  addedAt: z.string().datetime({ message: 'Invalid ISO 8601 datetime format' }).optional()
+  // -------- CHANGED: accept ISO string OR millis number --------
+  addedAt: z.union([z.string().datetime({ message: 'Invalid ISO 8601 datetime format' }), z.number()]).optional()
 });
 
 // Zod schema for the entire agent ingest request body.
@@ -82,15 +115,15 @@ export async function agentIngestFlow(rawInput: unknown): Promise<{ results: Ing
     const result: IngestResult = { status: 'error', message: `Invalid payload structure: ${errorMessages}` };
     return { results: [result], ownerUid: null, serverId: null };
   }
-  
+
   const { apiKey, items } = parsedInput.data;
-  
+
   // Optimization: if no items, do nothing.
   if (items.length === 0) {
     return { results: [], ownerUid: null, serverId: null };
   }
 
-  // 2. Resolve the server by API key. This is the most expensive part.
+  // 2. Resolve the server by API key.
   const serversSnap = await db.collectionGroup('servers').where('status', '==', 'linked').get();
 
   let matchedRef: FirebaseFirestore.DocumentReference | null = null;
@@ -100,7 +133,7 @@ export async function agentIngestFlow(rawInput: unknown): Promise<{ results: Ing
   for (const docSnap of serversSnap.docs) {
     const data = docSnap.data() as any;
     if (!data.apiKeyHash || !data.salt) continue;
-    
+
     const computedHash = await scryptHex(apiKey, data.salt, 64);
     if (timingSafeHexEquals(computedHash, data.apiKeyHash)) {
       matchedRef = docSnap.ref;
@@ -115,10 +148,10 @@ export async function agentIngestFlow(rawInput: unknown): Promise<{ results: Ing
     err.code = 'permission-denied';
     throw err;
   }
-  
+
   // 3. Update the agent's last seen timestamp (fire-and-forget).
   matchedRef.update({ lastSeen: admin.firestore.FieldValue.serverTimestamp() }).catch(e => console.error(`Failed to update lastSeen for ${serverId}`, e));
-  
+
   // 4. Process items in batches.
   const BATCH_SIZE = 450; // Keep a margin below the 500-write limit.
   const results: IngestResult[] = [];
@@ -147,16 +180,13 @@ export async function agentIngestFlow(rawInput: unknown): Promise<{ results: Ing
         status: 'indexed',
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       };
-      
-      // Handle addedAt timestamp logic
-      if (item.addedAt) {
-        dataToUpsert.addedAt = admin.firestore.Timestamp.fromDate(new Date(item.addedAt));
-      } else {
-        // To set `addedAt` only on creation without a pre-read, you'd typically use a Cloud Function trigger.
-        // For an API, the simple approach is to merge, which won't add `addedAt` on subsequent updates.
-        // A more complex approach involves reading first, which is inefficient in a batch.
-        // We accept that `addedAt` is only set on the very first ingest here.
+
+      // -------- CHANGED: force addedAt to be a Firestore Timestamp when provided --------
+      if (typeof item.addedAt !== 'undefined') {
+        dataToUpsert.addedAt = toTimestamp(item.addedAt);
       }
+      // If you want to *always* set addedAt on first create and never touch it again,
+      // you can later add a try-create path for new docs. For now we only set when provided.
 
       batch.set(docRef, dataToUpsert, { merge: true });
       opsInBatch++;
@@ -170,7 +200,7 @@ export async function agentIngestFlow(rawInput: unknown): Promise<{ results: Ing
     } catch (e: any) {
       // If an individual item fails validation or processing.
       const message = e instanceof z.ZodError ? JSON.stringify(e.issues) : (e.message || 'Unknown processing error');
-      results.push({ status: 'error', message, path: item.path });
+      results.push({ status: 'error', message, path: (item as any)?.path });
     }
   }
 

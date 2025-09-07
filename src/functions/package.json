@@ -1,0 +1,18 @@
+{
+  "name": "private-cinema-functions",
+  "version": "1.0.0",
+  "description": "Cloud Functions for Private Cinema",
+  "main": "lib/index.js",
+  "private": true,
+  "dependencies": {
+    "cors": "^2.8.5",
+    "firebase-admin": "^12.3.1",
+    "firebase-functions": "^5.1.1",
+    "node-fetch": "^2.7.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "typescript": "^5.4.5"
+  }
+}
