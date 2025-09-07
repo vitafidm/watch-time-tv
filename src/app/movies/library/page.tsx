@@ -1,20 +1,19 @@
 
 "use client"
 
-import { useMediaByType } from "@/lib/hooks/catalog";
 import { useAuthUser } from "@/hooks/useAuthUser";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Film, Sparkles, RefreshCw } from "lucide-react";
 import type { MediaDoc } from "@/lib/db.types";
-import { useMemo, useState, useCallback } from "react";
+import { useMemo, useState, useCallback, useRef } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { WatchlistButton } from "@/components/watchlist-button";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { ENV } from "@/lib/env";
-
+import { useInfiniteFirestore } from "@/hooks/useInfiniteFirestore";
 
 // A version of MediaCard that works with MediaDoc from Firestore
 function MediaDocCard({ item }: { item: MediaDoc & {id: string} }) {
@@ -78,9 +77,18 @@ function MediaDocCard({ item }: { item: MediaDoc & {id: string} }) {
 
 function MovieLibrary() {
   const { user } = useAuthUser();
-  const { data: movies, loading } = useMediaByType(user?.uid || "", "movie", 100);
+  const { items: movies, loading, hasMore, attachSentinel, reset } = useInfiniteFirestore<MediaDoc & {id: string}>({
+    collectionPath: user ? `users/${user.uid}/media` : undefined,
+    where: [['type', '==', 'movie']],
+    orderBy: ['addedAt', 'desc'],
+    pageSize: 24,
+    map: (doc) => ({ id: doc.id, ...doc.data() } as MediaDoc & {id: string}),
+  });
+
   const { toast } = useToast();
   const [isEnriching, setIsEnriching] = useState(false);
+  const sentinelRef = useRef(null);
+  attachSentinel(sentinelRef.current);
 
   const handleEnrich = useCallback(async () => {
     if (!user || !movies || movies.length === 0 || !ENV.TMDB_ENRICH_URL) {
@@ -92,6 +100,7 @@ function MovieLibrary() {
 
     try {
         const idToken = await user.getIdToken();
+        // Enrich only the movies currently visible on the screen
         const itemsToEnrich = movies.map(m => ({
             mediaId: m.id,
             type: m.type,
@@ -115,6 +124,7 @@ function MovieLibrary() {
 
         const enrichedCount = result.results?.filter((r: any) => r.status === 'enriched').length || 0;
         toast({ title: "Enrichment Complete", description: `Successfully updated metadata for ${enrichedCount} movies.` });
+        if (enrichedCount > 0) reset();
 
     } catch (err: any) {
         console.error("Enrichment failed:", err);
@@ -122,7 +132,9 @@ function MovieLibrary() {
     } finally {
         setIsEnriching(false);
     }
-  }, [user, movies, toast]);
+  }, [user, movies, toast, reset]);
+
+  const showInitialLoading = loading && movies.length === 0;
 
   return (
     <div className="space-y-6">
@@ -131,13 +143,13 @@ function MovieLibrary() {
             <Film className="h-8 w-8 text-primary" />
             <h1 className="font-headline text-4xl font-bold tracking-tight">Movie Library</h1>
         </div>
-        <Button onClick={handleEnrich} disabled={loading || isEnriching || movies.length === 0}>
+        <Button onClick={handleEnrich} disabled={isEnriching || movies.length === 0}>
             {isEnriching ? <RefreshCw className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
             {isEnriching ? 'Enriching...' : 'Enrich Metadata'}
         </Button>
       </div>
 
-      {loading && (
+      {showInitialLoading && (
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 md:gap-6">
           {Array.from({ length: 12 }).map((_, i) => (
              <div key={i} className="space-y-2">
@@ -149,7 +161,7 @@ function MovieLibrary() {
         </div>
       )}
 
-      {!loading && movies.length > 0 && (
+      {!showInitialLoading && movies.length > 0 && (
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 md:gap-6">
           {movies.map(item => (
             <MediaDocCard key={item.id} item={item} />
@@ -164,6 +176,8 @@ function MovieLibrary() {
           <p className="mt-2 text-muted-foreground">Your movie library is empty. Connect an agent to add media.</p>
         </div>
       )}
+
+      {hasMore && <div ref={sentinelRef} className="h-10 w-full" />}
     </div>
   );
 }

@@ -1,16 +1,16 @@
 
 "use client"
 
-import { useMediaByType } from "@/lib/hooks/catalog";
 import { useAuthUser } from "@/hooks/useAuthUser";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tv } from "lucide-react";
 import type { MediaDoc } from "@/lib/db.types";
-import { useMemo } from "react";
+import { useMemo, useRef } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { WatchlistButton } from "@/components/watchlist-button";
+import { useInfiniteFirestore } from "@/hooks/useInfiniteFirestore";
 
 // A version of MediaCard that works with MediaDoc from Firestore
 function MediaDocCard({ item }: { item: MediaDoc & {id: string} }) {
@@ -65,6 +65,9 @@ function MediaDocCard({ item }: { item: MediaDoc & {id: string} }) {
                 </h3>
                 <div className="flex items-center gap-2 text-xs text-muted-foreground">
                     <span>{item.year || new Date(mediaItem.release_date).getFullYear()}</span>
+                    {item.season && item.episode && (
+                        <span>&bull; S{item.season.toString().padStart(2, '0')}E{item.episode.toString().padStart(2, '0')}</span>
+                    )}
                 </div>
                 </div>
             </div>
@@ -74,7 +77,18 @@ function MediaDocCard({ item }: { item: MediaDoc & {id: string} }) {
 
 function TvLibrary() {
   const { user } = useAuthUser();
-  const { data: episodes, loading } = useMediaByType(user?.uid || "", "episode", 100);
+  const { items: episodes, loading, hasMore, attachSentinel } = useInfiniteFirestore<MediaDoc & { id: string }>({
+      collectionPath: user ? `users/${user.uid}/media` : undefined,
+      where: [['type', '==', 'episode']],
+      orderBy: ['addedAt', 'desc'],
+      pageSize: 96,
+      map: (doc) => ({ id: doc.id, ...doc.data() } as MediaDoc & {id: string}),
+  });
+
+  const sentinelRef = useRef(null);
+  attachSentinel(sentinelRef.current);
+
+  const showInitialLoading = loading && episodes.length === 0;
 
   return (
     <div className="space-y-6">
@@ -83,9 +97,9 @@ function TvLibrary() {
         <h1 className="font-headline text-4xl font-bold tracking-tight">TV Library</h1>
       </div>
 
-      {loading && (
+      {showInitialLoading && (
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 md:gap-6">
-          {Array.from({ length: 12 }).map((_, i) => (
+          {Array.from({ length: 18 }).map((_, i) => (
              <div key={i} className="space-y-2">
                 <Skeleton className="aspect-[2/3] w-full rounded-lg" />
                 <Skeleton className="h-5 w-5/6" />
@@ -110,6 +124,9 @@ function TvLibrary() {
           <p className="mt-2 text-muted-foreground">Your TV library is empty. Connect an agent to add media.</p>
         </div>
       )}
+      
+      {hasMore && <div ref={sentinelRef} className="h-10 w-full" />}
+
     </div>
   );
 }
