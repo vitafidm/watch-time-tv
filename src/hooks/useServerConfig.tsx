@@ -1,5 +1,4 @@
-"use client";
-
+// src/hooks/useServerConfig.tsx
 import { useEffect, useMemo, useState, createContext, useContext, ReactNode } from "react";
 import { onAuthStateChanged, User } from "firebase/auth";
 import { auth } from "@/lib/firebase.client";
