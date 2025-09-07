@@ -2,4 +2,5 @@ export const ENV = {
   CLAIM_TOKEN_URL: process.env.NEXT_PUBLIC_CLAIM_TOKEN_URL ?? "",
   AGENT_CLAIM_URL: process.env.NEXT_PUBLIC_AGENT_CLAIM_URL ?? "",
   AGENT_INGEST_URL: process.env.NEXT_PUBLIC_AGENT_INGEST_URL ?? "",
+  TMDB_ENRICH_URL: process.env.NEXT_PUBLIC_TMDB_ENRICH_URL ?? "",
 };

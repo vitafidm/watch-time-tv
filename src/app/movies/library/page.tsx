@@ -5,12 +5,16 @@ import { useMediaByType } from "@/lib/hooks/catalog";
 import { useAuthUser } from "@/hooks/useAuthUser";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Film } from "lucide-react";
+import { Film, Sparkles, RefreshCw } from "lucide-react";
 import type { MediaDoc } from "@/lib/db.types";
-import { useMemo } from "react";
+import { useMemo, useState, useCallback } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { WatchlistButton } from "@/components/watchlist-button";
+import { Button } from "@/components/ui/button";
+import { useToast } from "@/hooks/use-toast";
+import { ENV } from "@/lib/env";
+
 
 // A version of MediaCard that works with MediaDoc from Firestore
 function MediaDocCard({ item }: { item: MediaDoc & {id: string} }) {
@@ -75,12 +79,62 @@ function MediaDocCard({ item }: { item: MediaDoc & {id: string} }) {
 function MovieLibrary() {
   const { user } = useAuthUser();
   const { data: movies, loading } = useMediaByType(user?.uid || "", "movie", 100);
+  const { toast } = useToast();
+  const [isEnriching, setIsEnriching] = useState(false);
+
+  const handleEnrich = useCallback(async () => {
+    if (!user || !movies || movies.length === 0 || !ENV.TMDB_ENRICH_URL) {
+        toast({ title: "Error", description: "Cannot enrich. User not signed in, library is empty, or enrich URL is not configured.", variant: "destructive" });
+        return;
+    }
+    setIsEnriching(true);
+    toast({ title: "Starting Enrichment", description: "Fetching metadata from TMDB for your movie library..." });
+
+    try {
+        const idToken = await user.getIdToken();
+        const itemsToEnrich = movies.map(m => ({
+            mediaId: m.id,
+            type: m.type,
+            title: m.title,
+            year: m.year,
+        }));
+        
+        const response = await fetch(ENV.TMDB_ENRICH_URL, {
+            method: "POST",
+            headers: {
+                "Authorization": `Bearer ${idToken}`,
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ items: itemsToEnrich }),
+        });
+
+        const result = await response.json();
+        if (!response.ok) {
+            throw new Error(result?.error?.message || "Failed to enrich metadata.");
+        }
+
+        const enrichedCount = result.results?.filter((r: any) => r.status === 'enriched').length || 0;
+        toast({ title: "Enrichment Complete", description: `Successfully updated metadata for ${enrichedCount} movies.` });
+
+    } catch (err: any) {
+        console.error("Enrichment failed:", err);
+        toast({ title: "Enrichment Failed", description: err.message, variant: "destructive"});
+    } finally {
+        setIsEnriching(false);
+    }
+  }, [user, movies, toast]);
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center gap-4">
-        <Film className="h-8 w-8 text-primary" />
-        <h1 className="font-headline text-4xl font-bold tracking-tight">Movie Library</h1>
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div className="flex items-center gap-4">
+            <Film className="h-8 w-8 text-primary" />
+            <h1 className="font-headline text-4xl font-bold tracking-tight">Movie Library</h1>
+        </div>
+        <Button onClick={handleEnrich} disabled={loading || isEnriching || movies.length === 0}>
+            {isEnriching ? <RefreshCw className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
+            {isEnriching ? 'Enriching...' : 'Enrich Metadata'}
+        </Button>
       </div>
 
       {loading && (
