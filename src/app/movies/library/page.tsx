@@ -14,17 +14,34 @@ import { WatchlistButton } from "@/components/watchlist-button";
 
 // A version of MediaCard that works with MediaDoc from Firestore
 function MediaDocCard({ item }: { item: MediaDoc & {id: string} }) {
-    const mediaItem = useMemo(() => ({
-        id: item.tmdbId || Math.random(), // Fallback id
-        title: item.title,
-        overview: (item as any).overview || '',
-        poster_path: item.posterUrl || `https://picsum.photos/500/750?random=${item.mediaId}`,
-        backdrop_path: item.backdropUrl || `https://picsum.photos/1280/720?random=${item.mediaId}`,
-        release_date: item.addedAt?.toDate().toISOString() || new Date().toISOString(),
-        vote_average: (item as any).vote_average || 0,
-        genres: (item as any).genres || [],
-        media_type: item.type,
-    }), [item]);
+    const mediaItem = useMemo(() => {
+        // Safely determine the release date, handling both Timestamp objects and ISO strings.
+        let releaseDate = new Date().toISOString();
+        if (item.addedAt) {
+            if (typeof (item.addedAt as any).toDate === 'function') {
+                // It's a Firestore Timestamp
+                releaseDate = (item.addedAt as any).toDate().toISOString();
+            } else if (typeof item.addedAt === 'string') {
+                // It's likely an ISO string
+                const d = new Date(item.addedAt);
+                if (!isNaN(d.getTime())) {
+                    releaseDate = d.toISOString();
+                }
+            }
+        }
+
+        return {
+            id: item.tmdbId || Math.random(), // Fallback id
+            title: item.title,
+            overview: (item as any).overview || '',
+            poster_path: item.posterUrl || `https://picsum.photos/500/750?random=${item.mediaId}`,
+            backdrop_path: item.backdropUrl || `https://picsum.photos/1280/720?random=${item.mediaId}`,
+            release_date: releaseDate,
+            vote_average: (item as any).vote_average || 0,
+            genres: (item as any).genres || [],
+            media_type: item.type,
+        };
+    }, [item]);
     
     return (
         <Link href={`/media/${item.mediaId}`} className="group block" prefetch={false}>
