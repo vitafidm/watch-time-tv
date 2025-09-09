@@ -2,6 +2,7 @@
 'use client';
 
 import type { Timestamp } from 'firebase/firestore';
+import { deriveShowName, showSlug } from './showKey';
 
 export type EpisodeDoc = {
   id: string;
@@ -45,29 +46,23 @@ function toMillis(v: EpisodeDoc['addedAt']): number {
   return 0;
 }
 
-/**
- * Derives a show title from an episode title by trimming SxxExx patterns.
- * e.g., "My Show S01E05" -> "My Show"
- */
-function deriveShowTitle(episodeTitle: string): string {
-    return (episodeTitle || 'Unknown Show').replace(/\s*[Ss]\d{1,2}[Ee]\d{1,3}.*$/, '').trim();
-}
-
 export function groupEpisodesByShow(episodes: EpisodeDoc[]): ShowListItem[] {
   const showsMap = new Map<string, {
+    name: string;
     episodes: EpisodeDoc[];
     posterUrl?: string;
     latestAddedAt: number;
   }>();
 
   for (const episode of episodes) {
-    const showId = episode.showId || `__noShow:${deriveShowTitle(episode.title || episode.id)}`;
+    const name = deriveShowName(episode as any);
+    const id = showSlug(name);
     
-    if (!showsMap.has(showId)) {
-      showsMap.set(showId, { episodes: [], latestAddedAt: 0 });
+    if (!showsMap.has(id)) {
+      showsMap.set(id, { name, episodes: [], latestAddedAt: 0 });
     }
 
-    const group = showsMap.get(showId)!;
+    const group = showsMap.get(id)!;
     group.episodes.push(episode);
     
     const addedAtMs = toMillis(episode.addedAt);
@@ -84,12 +79,9 @@ export function groupEpisodesByShow(episodes: EpisodeDoc[]): ShowListItem[] {
         bestPoster = group.episodes.find(e => e.posterUrl)?.posterUrl;
     }
 
-    // Determine title: use explicit showTitle, else derive from first episode.
-    const title = group.episodes[0].showTitle || deriveShowTitle(group.episodes[0].title || 'Unknown Show');
-
     result.push({
       id,
-      title,
+      title: group.name,
       posterUrl: bestPoster,
       episodeCount: group.episodes.length,
       latestAddedAt: group.latestAddedAt,
