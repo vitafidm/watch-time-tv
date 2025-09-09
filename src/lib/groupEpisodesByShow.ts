@@ -2,7 +2,7 @@
 'use client';
 
 import type { Timestamp } from 'firebase/firestore';
-import { deriveShowName, showSlug } from './showKey';
+import { deriveShowName, showSlug, toTitleCaseIfAllCaps } from './showKey';
 
 export type EpisodeDoc = {
   id: string;
@@ -81,7 +81,7 @@ export function groupEpisodesByShow(episodes: EpisodeDoc[]): ShowListItem[] {
 
     result.push({
       id,
-      title: group.name,
+      title: toTitleCaseIfAllCaps(group.name),
       posterUrl: bestPoster,
       episodeCount: group.episodes.length,
       latestAddedAt: group.latestAddedAt,

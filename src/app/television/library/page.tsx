@@ -10,6 +10,7 @@ import { useMemo, useRef } from "react";
 import Image from "next/image";
 import { useInfiniteFirestore } from "@/hooks/useInfiniteFirestore";
 import { groupEpisodesByShow, ShowListItem, EpisodeDoc } from "@/lib/groupEpisodesByShow";
+import { deriveShowName } from "@/lib/showKey";
 
 function ShowCard({ item }: { item: ShowListItem }) {
     return (
@@ -48,7 +49,20 @@ function TvLibrary() {
       map: (doc) => ({ id: doc.id, ...doc.data() } as MediaDoc & {id: string}),
   });
 
-  const shows = useMemo(() => groupEpisodesByShow(episodes as EpisodeDoc[]), [episodes]);
+  const shows = useMemo(() => {
+    const grouped = groupEpisodesByShow(episodes as EpisodeDoc[]);
+    
+    // Temporary debug log
+    if (process.env.NODE_ENV === 'development' && episodes.length > 0) {
+        console.table(episodes.slice(0, 10).map(ep => ({
+            filename: ep.filename,
+            path: ep.path,
+            derived: deriveShowName(ep as any)
+        })));
+    }
+
+    return grouped;
+  }, [episodes]);
 
   const sentinelRef = useRef(null);
   attachSentinel(sentinelRef.current);

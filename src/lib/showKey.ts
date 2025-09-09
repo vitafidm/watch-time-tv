@@ -1,65 +1,93 @@
 
 export type EpisodeLike = {
   id: string;
-  title?: string;      // often the filename without extension
-  filename?: string;   // full filename with extension
-  path?: string;       // full file path
+  title?: string;
+  filename?: string;
+  path?: string;
 };
 
-const TV_ROOT_DEFAULT = '/media/TV/';
+/**
+ * Converts an ALL_CAPS string to Title Case.
+ * @param {string} name The string to convert.
+ * @returns {string} The converted string or the original if not all caps.
+ */
+export function toTitleCaseIfAllCaps(name: string): string {
+    if (!name || name.length < 3) return name;
+    
+    const letterCount = (name.match(/[a-zA-Z]/g) || []).length;
+    if (letterCount === 0) return name;
 
-function normalizeBase(str: string): string {
-  // replace separators with spaces, collapse whitespace
-  return str
-    .replace(/\.[^.]+$/, '')            // drop extension
-    .replace(/[._]+/g, ' ')             // dots/underscores -> space
-    .replace(/\s+/g, ' ')               // collapse spaces
-    .trim();
+    const upperCount = (name.match(/[A-Z]/g) || []).length;
+
+    if (upperCount / letterCount >= 0.8) { // 80% or more letters are uppercase
+        return name.toLowerCase().replace(/\b\w/g, char => char.toUpperCase());
+    }
+    return name;
 }
 
-export function deriveShowName(ep: EpisodeLike, opts?: { tvRoot?: string }): string {
-  const tvRoot = (opts?.tvRoot ?? process.env.NEXT_PUBLIC_TV_ROOT ?? TV_ROOT_DEFAULT)
-    .replace(/\\/g, '/');
 
-  const baseRaw = ep.filename ?? ep.title ?? '';
-  let base = normalizeBase(baseRaw);
+/**
+ * Derives a clean show name from an episode's file metadata.
+ * It prioritizes the parent folder name and falls back to parsing the filename.
+ * @param {EpisodeLike} ep The episode metadata.
+ * @returns {string} The derived show name.
+ */
+export function deriveShowName(ep: EpisodeLike): string {
+  let baseName = '';
 
-  // Episode token patterns (ordered, earliest match wins)
-  const patterns = [
-    /\bS\d{1,2}E\d{1,2}\b/i,   // S03E19 / s05e23
-    /\b\d{1,2}x\d{1,2}\b/i,    // 6x11
-    /\bSeason\s*\d+\b/i,       // Season 5
-  ];
-
-  let cutIdx = -1;
-  for (const re of patterns) {
-    const m = re.exec(base);
-    if (m) {
-      cutIdx = (cutIdx === -1) ? m.index : Math.min(cutIdx, m.index);
+  // Priority 1: Use parent folder name from the path.
+  if (ep.path) {
+    const segments = ep.path.split('/').filter(Boolean);
+    if (segments.length > 1) {
+      baseName = segments[segments.length - 2];
     }
   }
 
-  let name = '';
-  if (cutIdx > -1) {
-    name = base.slice(0, cutIdx);
-  } else if (ep.path && ep.path.includes(tvRoot)) {
-    // Fallback: folder after TV root
-    const after = ep.path.slice(ep.path.indexOf(tvRoot) + tvRoot.length);
-    const firstFolder = after.split('/')[0] || '';
-    // Also remove any year in parenthesis like (2023)
-    name = firstFolder.replace(/\s*\(\d{4}\)\s*$/, '');
-  } else {
-    // last-resort: take first segment before a dash
-    name = base.split('-')[0];
+  // Priority 2: Fallback to filename if no suitable folder was found.
+  if (!baseName) {
+    const baseRaw = ep.filename ?? ep.title ?? '';
+    let normalizedFile = baseRaw.replace(/\.[^.]+$/, '').replace(/[._]+/g, ' ').trim();
+    
+    const patterns = [
+        /\bS\d{1,2}E\d{1,2}\b/i,
+        /\b\d{1,2}x\d{1,2}\b/i,
+        /\bSeason\s*\d+\b/i,
+    ];
+    let cutIdx = -1;
+    for (const re of patterns) {
+        const m = re.exec(normalizedFile);
+        if (m) {
+            cutIdx = (cutIdx === -1) ? m.index : Math.min(cutIdx, m.index);
+        }
+    }
+    baseName = cutIdx > -1 ? normalizedFile.slice(0, cutIdx) : normalizedFile;
+  }
+  
+  // Cleanup passes
+  let cleanedName = baseName.trim();
+  
+  // Remove common junk suffixes
+  const junkSuffixes = [
+      /( -\s*(Season|Series)\s*\d+.*)$/i,
+      /( -\s*Book\s*\d+.*)$/i,
+      /( -\s*Disc\s*[^-]+)$/i,
+  ];
+  for (const re of junkSuffixes) {
+    cleanedName = cleanedName.replace(re, '');
   }
 
-  // Clean trailing separators and extra spaces
-  name = name.replace(/[-:–—]+$/,'').trim();
-  name = name.replace(/\s+/g,' ');
+  // Remove trailing separators and collapse whitespace
+  cleanedName = cleanedName.replace(/[-:–—]+$/, '').trim().replace(/\s+/g, ' ');
 
-  return name || 'Unknown Show';
+  return cleanedName || 'Unknown Show';
 }
 
+
+/**
+ * Creates a URL-friendly slug from a show name.
+ * @param {string} name The show name.
+ * @returns {string} The slugified name.
+ */
 export function showSlug(name: string): string {
   return name
     .toLowerCase()
