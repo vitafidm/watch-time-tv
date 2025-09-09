@@ -1,4 +1,5 @@
 
+
 export type EpisodeLike = {
   id: string;
   title?: string;
@@ -26,6 +27,27 @@ export function toTitleCaseIfAllCaps(name: string): string {
 }
 
 
+function runCleanup(name: string): string {
+    let cleanedName = name.trim();
+    
+    // Remove common junk suffixes
+    const junkSuffixes = [
+        /( -\s*(Season|Series)\s*\d+.*)$/i,
+        /( -\s*Book\s*\d+.*)$/i,
+        /( -\s*Disc\s*[^-]+)$/i,
+    ];
+    for (const re of junkSuffixes) {
+      cleanedName = cleanedName.replace(re, '');
+    }
+  
+    // Remove trailing separators and collapse whitespace
+    cleanedName = cleanedName.replace(/[-:–—]+$/, '').trim().replace(/\s+/g, ' ');
+  
+    return cleanedName;
+}
+
+const SEASON_ISH_REGEX = /^(season\s*\d+|series\s*\d+|disc\s*.+|book\s*\d+|extras?)$/i;
+
 /**
  * Derives a clean show name from an episode's file metadata.
  * It prioritizes the parent folder name and falls back to parsing the filename.
@@ -33,53 +55,67 @@ export function toTitleCaseIfAllCaps(name: string): string {
  * @returns {string} The derived show name.
  */
 export function deriveShowName(ep: EpisodeLike): string {
-  let baseName = '';
+    let derivedName = '';
+    const rawPath = (ep.path || '').replace(/\\/g, '/');
 
-  // Priority 1: Use parent folder name from the path.
-  if (ep.path) {
-    const segments = ep.path.split('/').filter(Boolean);
-    if (segments.length > 1) {
-      baseName = segments[segments.length - 2];
-    }
-  }
+    // --- Logic 1: Derive from Path ---
+    if (rawPath) {
+        let envTvRoot = process.env.NEXT_PUBLIC_TV_ROOT;
+        if (envTvRoot) {
+            // Normalize tvRoot for matching
+            envTvRoot = envTvRoot.replace(/\\/g, '/').replace(/\/$/, '');
+            const rootIndex = rawPath.toLowerCase().indexOf(envTvRoot.toLowerCase());
 
-  // Priority 2: Fallback to filename if no suitable folder was found.
-  if (!baseName) {
-    const baseRaw = ep.filename ?? ep.title ?? '';
-    let normalizedFile = baseRaw.replace(/\.[^.]+$/, '').replace(/[._]+/g, ' ').trim();
-    
-    const patterns = [
-        /\bS\d{1,2}E\d{1,2}\b/i,
-        /\b\d{1,2}x\d{1,2}\b/i,
-        /\bSeason\s*\d+\b/i,
-    ];
-    let cutIdx = -1;
-    for (const re of patterns) {
-        const m = re.exec(normalizedFile);
-        if (m) {
-            cutIdx = (cutIdx === -1) ? m.index : Math.min(cutIdx, m.index);
+            if (rootIndex !== -1) {
+                const afterRoot = rawPath.slice(rootIndex + envTvRoot.length).replace(/^\//, '');
+                derivedName = afterRoot.split('/')[0];
+            }
+        }
+        
+        // If no explicit root matched, try implicit logic
+        if (!derivedName) {
+            const segments = rawPath.split('/').filter(Boolean);
+            if (segments.length > 1) {
+                let parentIndex = segments.length - 2;
+                let parent = segments[parentIndex];
+                
+                // If the parent is a season folder, go up one level
+                if (SEASON_ISH_REGEX.test(parent)) {
+                    parentIndex = segments.length - 3;
+                    parent = segments[parentIndex];
+                }
+                derivedName = parent || '';
+            }
+        }
+
+        // Final safety check: if we somehow derived a season-ish name from the path, discard it
+        if (SEASON_ISH_REGEX.test(derivedName)) {
+            derivedName = '';
         }
     }
-    baseName = cutIdx > -1 ? normalizedFile.slice(0, cutIdx) : normalizedFile;
-  }
-  
-  // Cleanup passes
-  let cleanedName = baseName.trim();
-  
-  // Remove common junk suffixes
-  const junkSuffixes = [
-      /( -\s*(Season|Series)\s*\d+.*)$/i,
-      /( -\s*Book\s*\d+.*)$/i,
-      /( -\s*Disc\s*[^-]+)$/i,
-  ];
-  for (const re of junkSuffixes) {
-    cleanedName = cleanedName.replace(re, '');
-  }
 
-  // Remove trailing separators and collapse whitespace
-  cleanedName = cleanedName.replace(/[-:–—]+$/, '').trim().replace(/\s+/g, ' ');
-
-  return cleanedName || 'Unknown Show';
+    // --- Logic 2: Fallback to Filename ---
+    if (!derivedName) {
+      const baseRaw = ep.filename ?? ep.title ?? '';
+      let normalizedFile = baseRaw.replace(/\.[^.]+$/, '').replace(/[._]+/g, ' ').trim();
+      
+      const patterns = [
+          /\bS\d{1,2}E\d{1,2}\b/i,
+          /\b\d{1,2}x\d{1,2}\b/i,
+          /\bSeason\s*\d+\b/i,
+      ];
+      let cutIdx = -1;
+      for (const re of patterns) {
+          const m = re.exec(normalizedFile);
+          if (m) {
+              cutIdx = (cutIdx === -1) ? m.index : Math.min(cutIdx, m.index);
+          }
+      }
+      derivedName = cutIdx > -1 ? normalizedFile.slice(0, cutIdx) : normalizedFile;
+    }
+    
+    const finalName = runCleanup(derivedName);
+    return finalName || 'Unknown Show';
 }
 
 
