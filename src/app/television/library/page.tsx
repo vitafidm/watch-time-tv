@@ -8,70 +8,33 @@ import { Tv } from "lucide-react";
 import type { MediaDoc } from "@/lib/db.types";
 import { useMemo, useRef } from "react";
 import Image from "next/image";
-import Link from "next/link";
-import { WatchlistButton } from "@/components/watchlist-button";
 import { useInfiniteFirestore } from "@/hooks/useInfiniteFirestore";
+import { groupEpisodesByShow, ShowListItem, EpisodeDoc } from "@/lib/groupEpisodesByShow";
 
-// A version of MediaCard that works with MediaDoc from Firestore
-function MediaDocCard({ item }: { item: MediaDoc & {id: string} }) {
-    const mediaItem = useMemo(() => {
-        // Safely determine the release date, handling both Timestamp objects and ISO strings.
-        let releaseDate = new Date().toISOString();
-        if (item.addedAt) {
-            if (typeof (item.addedAt as any).toDate === 'function') {
-                // It's a Firestore Timestamp
-                releaseDate = (item.addedAt as any).toDate().toISOString();
-            } else if (typeof item.addedAt === 'string') {
-                // It's likely an ISO string
-                const d = new Date(item.addedAt);
-                if (!isNaN(d.getTime())) {
-                    releaseDate = d.toISOString();
-                }
-            }
-        }
-
-        return {
-            id: item.tmdbId || Math.random(), // Fallback id
-            title: item.title,
-            overview: (item as any).overview || '',
-            poster_path: item.posterUrl || `https://picsum.photos/500/750?random=${item.mediaId}`,
-            backdrop_path: item.backdropUrl || `https://picsum.photos/1280/720?random=${item.mediaId}`,
-            release_date: releaseDate,
-            vote_average: (item as any).vote_average || 0,
-            genres: (item as any).genres || [],
-            media_type: item.type,
-        };
-    }, [item]);
-    
+function ShowCard({ item }: { item: ShowListItem }) {
     return (
-        <Link href={`/media/${item.mediaId}`} className="group block" prefetch={false}>
+        <div role="button" aria-disabled="true" className="group block">
             <div className="flex flex-col gap-2">
                 <div className="relative aspect-[2/3] w-full overflow-hidden rounded-lg shadow-lg transition-all duration-300 group-hover:scale-105 group-hover:shadow-primary/40">
                 <Image
-                    src={mediaItem.poster_path}
-                    alt={mediaItem.title}
+                    src={item.posterUrl || `https://picsum.photos/500/750?random=${item.id}`}
+                    alt={item.title}
                     width={500}
                     height={750}
                     className="object-cover bg-muted"
-                    data-ai-hint={`${item.type} poster`}
+                    data-ai-hint="tv show poster"
                 />
-                <div className="absolute top-2 right-2 z-10 opacity-0 transition-opacity duration-300 group-hover:opacity-100">
-                    <WatchlistButton item={mediaItem} asIcon />
-                </div>
                 </div>
                 <div className="space-y-1">
-                <h3 className="font-headline text-base font-bold text-foreground truncate">
-                    {item.title}
-                </h3>
-                <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                    <span>{item.year || new Date(mediaItem.release_date).getFullYear()}</span>
-                    {item.season && item.episode && (
-                        <span>&bull; S{item.season.toString().padStart(2, '0')}E{item.episode.toString().padStart(2, '0')}</span>
-                    )}
-                </div>
+                  <h3 className="font-headline text-base font-bold text-foreground truncate">
+                      {item.title}
+                  </h3>
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <span>{item.episodeCount} {item.episodeCount === 1 ? 'episode' : 'episodes'}</span>
+                  </div>
                 </div>
             </div>
-        </Link>
+        </div>
     );
 }
 
@@ -84,6 +47,8 @@ function TvLibrary() {
       pageSize: 96,
       map: (doc) => ({ id: doc.id, ...doc.data() } as MediaDoc & {id: string}),
   });
+
+  const shows = useMemo(() => groupEpisodesByShow(episodes as EpisodeDoc[]), [episodes]);
 
   const sentinelRef = useRef(null);
   attachSentinel(sentinelRef.current);
@@ -109,15 +74,15 @@ function TvLibrary() {
         </div>
       )}
 
-      {!showInitialLoading && episodes.length > 0 && (
+      {!showInitialLoading && shows.length > 0 && (
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 md:gap-6">
-          {episodes.map(item => (
-            <MediaDocCard key={item.id} item={item} />
+          {shows.map(item => (
+            <ShowCard key={item.id} item={item} />
           ))}
         </div>
       )}
 
-      {!loading && episodes.length === 0 && (
+      {!loading && shows.length === 0 && (
         <div className="flex flex-col items-center justify-center text-center border-2 border-dashed border-muted rounded-lg py-20">
           <Tv className="h-16 w-16 text-muted-foreground" />
           <h2 className="mt-6 text-2xl font-headline text-foreground">No TV Shows Found</h2>
