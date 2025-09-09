@@ -14,9 +14,12 @@ import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { ENV } from "@/lib/env";
 import { useInfiniteFirestore } from "@/hooks/useInfiniteFirestore";
+import { cleanMovieTitle } from "@/lib/movieTitle";
 
 // A version of MediaCard that works with MediaDoc from Firestore
 function MediaDocCard({ item }: { item: MediaDoc & {id: string} }) {
+    const displayTitle = useMemo(() => cleanMovieTitle(item as any), [item]);
+
     const mediaItem = useMemo(() => {
         // Safely determine the release date, handling both Timestamp objects and ISO strings.
         let releaseDate = new Date().toISOString();
@@ -64,7 +67,7 @@ function MediaDocCard({ item }: { item: MediaDoc & {id: string} }) {
                 </div>
                 <div className="space-y-1">
                 <h3 className="font-headline text-base font-bold text-foreground truncate">
-                    {item.title}
+                    {displayTitle}
                 </h3>
                 <div className="flex items-center gap-2 text-xs text-muted-foreground">
                     <span>{item.year || new Date(mediaItem.release_date).getFullYear()}</span>
