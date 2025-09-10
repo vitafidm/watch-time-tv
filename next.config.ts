@@ -22,6 +22,9 @@ const nextConfig: NextConfig = {
         port: '',
         pathname: '/**',
       },
+      { protocol: 'https', hostname: 'image.tmdb.org', pathname: '/t/p/**' },
+      { protocol: 'https', hostname: 'i.ytimg.com', pathname: '/vi/**' },
+      { protocol: 'https', hostname: 'firebasestorage.googleapis.com', pathname: '/**' },
     ],
   },
 };

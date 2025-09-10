@@ -35,12 +35,14 @@ function MediaDocCard({ item }: { item: MediaDoc & {id: string} }) {
                 }
             }
         }
+        
+        const poster = item.posterUrl || ((item as any).poster_path ? `https://image.tmdb.org/t/p/w500${(item as any).poster_path}` : `https://picsum.photos/seed/${item.id}/500/750`);
 
         return {
             id: item.tmdbId || Math.random(), // Fallback id
             title: item.title,
             overview: (item as any).overview || '',
-            poster_path: item.posterUrl || `https://picsum.photos/500/750?random=${item.mediaId}`,
+            poster_path: poster,
             backdrop_path: item.backdropUrl || `https://picsum.photos/1280/720?random=${item.mediaId}`,
             release_date: releaseDate,
             vote_average: (item as any).vote_average || 0,
@@ -175,7 +177,7 @@ function MovieLibrary() {
       {!loading && movies.length === 0 && (
         <div className="flex flex-col items-center justify-center text-center border-2 border-dashed border-muted rounded-lg py-20">
           <Film className="h-16 w-16 text-muted-foreground" />
-          <h2 className="mt-6 text-2xl font-headline text-foreground">No Movies Found</h2>
+          <h2 className="mt-2 text-2xl font-headline text-foreground">No Movies Found</h2>
           <p className="mt-2 text-muted-foreground">Your movie library is empty. Connect an agent to add media.</p>
         </div>
       )}

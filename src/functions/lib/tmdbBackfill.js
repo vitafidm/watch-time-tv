@@ -35,9 +35,9 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", { value: true });
 const functions = __importStar(require("firebase-functions"));
 const admin = __importStar(require("firebase-admin"));
+const initFirebase_1 = require("./initFirebase");
 const titleHelpers_1 = require("./titleHelpers");
 const tmdbClient_1 = require("./tmdbClient");
-const db = admin.firestore();
 // Helper to check if a value is present (not null, undefined, or empty string)
 const isPresent = (val) => val !== undefined && val !== null && val !== '';
 // Simplified version for this context
@@ -55,12 +55,11 @@ function deriveShowName(ep) {
     return cleaned.title || 'Unknown Show';
 }
 async function handleMovie(doc, includeCast) {
-    var _a, _b, _c, _d, _e, _f;
     const data = doc.data();
     const { title, year } = (0, titleHelpers_1.cleanTitleForSearch)(data.title || data.filename);
     const searchResults = await (0, tmdbClient_1.searchMovie)(title, year);
-    const movieRes = (_a = searchResults === null || searchResults === void 0 ? void 0 : searchResults.results) === null || _a === void 0 ? void 0 : _a[0];
-    if (!(movieRes === null || movieRes === void 0 ? void 0 : movieRes.id)) {
+    const movieRes = searchResults?.results?.[0];
+    if (!movieRes?.id) {
         return { id: doc.id, matched: null };
     }
     const details = await (0, tmdbClient_1.movieDetails)(movieRes.id);
@@ -84,16 +83,16 @@ async function handleMovie(doc, includeCast) {
         updatePayload.releaseDate = details.release_date;
     }
     if (!isPresent(data.director)) {
-        updatePayload.director = (_d = (_c = (_b = details.credits) === null || _b === void 0 ? void 0 : _b.crew) === null || _c === void 0 ? void 0 : _c.find((c) => c.job === 'Director')) === null || _d === void 0 ? void 0 : _d.name;
+        updatePayload.director = details.credits?.crew?.find((c) => c.job === 'Director')?.name;
     }
     if (!isPresent(data.tmdbId)) {
         updatePayload.tmdbId = details.id;
     }
     if (!isPresent(data.videoLink) && !data.videoLocked) {
-        updatePayload.videoLink = (0, titleHelpers_1.pickYouTubeTrailer)((_e = details.videos) === null || _e === void 0 ? void 0 : _e.results);
+        updatePayload.videoLink = (0, titleHelpers_1.pickYouTubeTrailer)(details.videos?.results);
     }
     if (includeCast && !isPresent(data.cast)) {
-        updatePayload.cast = (((_f = details.credits) === null || _f === void 0 ? void 0 : _f.cast) || []).slice(0, 10).map((c) => ({
+        updatePayload.cast = (details.credits?.cast || []).slice(0, 10).map((c) => ({
             name: c.name,
             profileUrl: (0, tmdbClient_1.posterUrl)(c.profile_path, 'w500'),
         }));
@@ -105,22 +104,21 @@ async function handleMovie(doc, includeCast) {
     return { id: doc.id, updated: false, skipped: true, matched: { tmdbId: details.id, title: details.title } };
 }
 async function handleEpisode(doc, includeCast) {
-    var _a, _b, _c, _d, _e;
     const data = doc.data();
     const showTitle = deriveShowName(data);
     if (showTitle === 'Unknown Show') {
         return { id: doc.id, matched: null };
     }
     const searchResults = await (0, tmdbClient_1.searchTV)(showTitle);
-    const showRes = (_a = searchResults === null || searchResults === void 0 ? void 0 : searchResults.results) === null || _a === void 0 ? void 0 : _a[0];
-    if (!(showRes === null || showRes === void 0 ? void 0 : showRes.id)) {
+    const showRes = searchResults?.results?.[0];
+    if (!showRes?.id) {
         return { id: doc.id, matched: null };
     }
     const showDetails = await (0, tmdbClient_1.tvDetails)(showRes.id);
     if (!showDetails) {
         return { id: doc.id, matched: { tmdbShowId: showRes.id, title: showRes.name } };
     }
-    const showRef = db.collection('shows').doc(String(showDetails.id));
+    const showRef = initFirebase_1.db.collection('shows').doc(String(showDetails.id));
     // Create/merge show doc
     const showUpdate = {};
     const showDoc = await showRef.get();
@@ -140,7 +138,7 @@ async function handleEpisode(doc, includeCast) {
     if (!isPresent(showData.title))
         showUpdate.title = showDetails.name;
     if (includeCast && !isPresent(showData.cast)) {
-        showUpdate.cast = (((_b = showDetails.aggregate_credits) === null || _b === void 0 ? void 0 : _b.cast) || []).slice(0, 10).map((c) => ({
+        showUpdate.cast = (showDetails.aggregate_credits?.cast || []).slice(0, 10).map((c) => ({
             name: c.name,
             profileUrl: (0, tmdbClient_1.posterUrl)(c.profile_path, 'w500'),
         }));
@@ -151,11 +149,11 @@ async function handleEpisode(doc, includeCast) {
     // Update episode doc
     const episodeUpdate = {};
     if (!isPresent(data.posterUrl) && !data.posterLocked)
-        episodeUpdate.posterUrl = (_c = showUpdate.posterUrl) !== null && _c !== void 0 ? _c : showData.posterUrl;
+        episodeUpdate.posterUrl = showUpdate.posterUrl ?? showData.posterUrl;
     if (!isPresent(data.overview))
-        episodeUpdate.overview = (_d = showUpdate.overview) !== null && _d !== void 0 ? _d : showData.overview;
+        episodeUpdate.overview = showUpdate.overview ?? showData.overview;
     if (!isPresent(data.showTitle))
-        episodeUpdate.showTitle = (_e = showUpdate.title) !== null && _e !== void 0 ? _e : showData.title;
+        episodeUpdate.showTitle = showUpdate.title ?? showData.title;
     if (!isPresent(data.showRef))
         episodeUpdate.showRef = showRef.path;
     if (Object.keys(episodeUpdate).length > 0) {
@@ -171,12 +169,12 @@ exports.default = functions.https.onRequest(async (req, res) => {
     }
     const { collection: coll = 'media', kind = 'any', batchSize = 50, dryRun = true, startAfterId, includeCast = false, } = req.body;
     const limit = Math.min(200, Math.max(1, batchSize));
-    let query = db.collection(coll).orderBy(admin.firestore.FieldPath.documentId()).limit(limit);
+    let query = initFirebase_1.db.collection(coll).orderBy(admin.firestore.FieldPath.documentId()).limit(limit);
     if (kind !== 'any') {
         query = query.where('type', '==', kind);
     }
     if (startAfterId) {
-        const startAfterDoc = await db.collection(coll).doc(startAfterId).get();
+        const startAfterDoc = await initFirebase_1.db.collection(coll).doc(startAfterId).get();
         if (startAfterDoc.exists) {
             query = query.startAfter(startAfterDoc);
         }
