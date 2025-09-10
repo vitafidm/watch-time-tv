@@ -283,3 +283,5 @@ export const tmdbBackfill = functions.pubsub
       return null;
     }
   });
+
+exports.tmdbBackfillMissing = require('./tmdbBackfill').default;
