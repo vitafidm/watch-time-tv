@@ -1,10 +1,9 @@
-
 import * as functions from 'firebase-functions';
 import * as admin from 'firebase-admin';
+import { db } from './initFirebase';
 import { cleanTitleForSearch, pickYouTubeTrailer } from './titleHelpers';
 import { searchMovie, movieDetails, searchTV, tvDetails, posterUrl, backdropUrl } from './tmdbClient';
 
-const db = admin.firestore();
 
 // Helper to check if a value is present (not null, undefined, or empty string)
 const isPresent = (val: any) => val !== undefined && val !== null && val !== '';
