@@ -6,7 +6,7 @@ import ProtectedRoute from "@/components/ProtectedRoute";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tv } from "lucide-react";
 import type { MediaDoc } from "@/lib/db.types";
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState, useEffect } from "react";
 import Image from "next/image";
 import { useInfiniteFirestore } from "@/hooks/useInfiniteFirestore";
 import { groupEpisodesByShow, ShowListItem, EpisodeDoc } from "@/lib/groupEpisodesByShow";
@@ -44,13 +44,18 @@ function ShowCard({ item, onEdit }: { item: ShowListItem, onEdit: () => void; })
 
 function TvLibrary() {
   const { user } = useAuthUser();
-  const { items: episodes, loading, hasMore, attachSentinel } = useInfiniteFirestore<MediaDoc & { id: string }>({
+  const { items: fetchedEpisodes, loading, hasMore, attachSentinel } = useInfiniteFirestore<MediaDoc & { id: string }>({
       collectionPath: user ? `users/${user.uid}/media` : undefined,
       where: [['type', '==', 'episode']],
       orderBy: ['addedAt', 'desc'],
       pageSize: 96,
       map: (doc) => ({ id: doc.id, ...doc.data() } as MediaDoc & {id: string}),
   });
+
+  const [episodes, setEpisodes] = useState<Array<MediaDoc & {id: string}>>([]);
+  useEffect(() => {
+    setEpisodes(fetchedEpisodes);
+  }, [fetchedEpisodes]);
 
   const [editingItem, setEditingItem] = useState<MediaEditModalItem | null>(null);
 
@@ -71,14 +76,26 @@ function TvLibrary() {
   const handleEdit = (item: ShowListItem) => {
     if (!user) return;
     setEditingItem({
-        id: item.id,
-        collectionPath: `users/${user.uid}/media`, // Note: This is simplified, real logic might need to find all episodes for this show
+        id: item.id, // This is the show slug, not a doc ID. The modal will need to handle this.
+        collectionPath: `users/${user.uid}/media`, // This is simplified.
         kind: 'episode',
         current: {
             showTitle: item.title,
             posterUrl: item.posterUrl,
         }
     });
+  };
+
+  const handleApplied = (id: string, patch: Partial<ShowListItem>) => {
+    setEpisodes(prev =>
+        prev.map(ep => {
+            const showId = deriveShowName(ep as any);
+            if (showId === id) {
+                return { ...ep, ...patch };
+            }
+            return ep;
+        })
+    );
   };
 
   const sentinelRef = useRef(null);
@@ -127,6 +144,7 @@ function TvLibrary() {
         open={!!editingItem}
         onClose={() => setEditingItem(null)}
         item={editingItem}
+        onApplied={handleApplied}
       />
     </div>
   );

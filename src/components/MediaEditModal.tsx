@@ -33,6 +33,7 @@ interface MediaEditModalProps {
   open: boolean;
   onClose: () => void;
   item: MediaEditModalItem | null;
+  onApplied?: (id: string, patch: Partial<any>) => void;
 }
 
 // TMDB search result type
@@ -43,7 +44,7 @@ type SearchResult = {
   posterUrl: string | null;
 };
 
-export function MediaEditModal({ open, onClose, item }: MediaEditModalProps) {
+export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModalProps) {
   const [activeTab, setActiveTab] = React.useState("match");
   const { toast } = useToast();
   const { user } = useAuthUser();
@@ -113,9 +114,16 @@ export function MediaEditModal({ open, onClose, item }: MediaEditModalProps) {
             includeCast: item.kind === 'movie', // only include cast for movies for now
         };
 
-        await callFunction('tmdbFixMatch', payload, idToken);
+        const result = await callFunction('tmdbFixMatch', payload, idToken);
         
         toast({ title: "Match Updated", description: `Successfully matched with "${selectedResult.title}".` });
+        
+        onApplied?.(item.id, {
+            posterUrl: selectedResult.posterUrl || item.current.posterUrl,
+            title: selectedResult.title || item.current.title,
+            showTitle: selectedResult.title || item.current.showTitle,
+        });
+
         onClose();
     } catch (err: any) {
         toast({ title: "Fix Match Failed", description: err.message, variant: 'destructive' });
@@ -136,16 +144,21 @@ export function MediaEditModal({ open, onClose, item }: MediaEditModalProps) {
       };
 
       let hasChanges = false;
+      const patch: Partial<any> = {};
+
       if (posterUrl !== (item.current.posterUrl || '')) {
         payload.posterUrl = posterUrl;
+        patch.posterUrl = posterUrl;
         hasChanges = true;
       }
       if (backdropUrl !== (item.current.backdropUrl || '')) {
         payload.backdropUrl = backdropUrl;
+        patch.backdropUrl = backdropUrl;
         hasChanges = true;
       }
       if (trailerUrl !== (item.current.videoLink || '')) {
         payload.videoLink = trailerUrl;
+        patch.videoLink = trailerUrl;
         hasChanges = true;
       }
 
@@ -157,6 +170,7 @@ export function MediaEditModal({ open, onClose, item }: MediaEditModalProps) {
       await callFunction('tmdbManualSet', payload, idToken);
 
       toast({ title: "Artwork Saved", description: "Custom URLs have been saved and locked." });
+      onApplied?.(item.id, patch);
       onClose();
 
     } catch (err: any) {

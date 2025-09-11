@@ -6,7 +6,7 @@ import ProtectedRoute from "@/components/ProtectedRoute";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Film, Sparkles, RefreshCw } from "lucide-react";
 import type { MediaDoc } from "@/lib/db.types";
-import { useMemo, useState, useCallback, useRef } from "react";
+import { useMemo, useState, useCallback, useRef, useEffect } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { WatchlistButton } from "@/components/watchlist-button";
@@ -83,13 +83,18 @@ function MediaDocCard({ item, onEdit }: { item: MediaDoc & {id: string}, onEdit:
 
 function MovieLibrary() {
   const { user } = useAuthUser();
-  const { items: movies, loading, hasMore, attachSentinel, reset } = useInfiniteFirestore<MediaDoc & {id: string}>({
+  const { items: fetchedMovies, loading, hasMore, attachSentinel, reset } = useInfiniteFirestore<MediaDoc & {id: string}>({
     collectionPath: user ? `users/${user.uid}/media` : undefined,
     where: [['type', '==', 'movie']],
     orderBy: ['addedAt', 'desc'],
     pageSize: 24,
     map: (doc) => ({ id: doc.id, ...doc.data() } as MediaDoc & {id: string}),
   });
+
+  const [movies, setMovies] = useState<Array<MediaDoc & {id: string}>>([]);
+  useEffect(() => {
+    setMovies(fetchedMovies);
+  }, [fetchedMovies]);
 
   const { toast } = useToast();
   const [isEnriching, setIsEnriching] = useState(false);
@@ -109,6 +114,10 @@ function MovieLibrary() {
             posterUrl: item.posterUrl,
         }
     });
+  };
+  
+  const handleApplied = (id: string, patch: Partial<MediaDoc>) => {
+    setMovies(prev => prev.map(it => it.id === id ? { ...it, ...patch } : it));
   };
 
   const handleEnrich = useCallback(async () => {
@@ -203,6 +212,7 @@ function MovieLibrary() {
         open={!!editingItem}
         onClose={() => setEditingItem(null)}
         item={editingItem}
+        onApplied={handleApplied}
       />
     </div>
   );
