@@ -285,3 +285,15 @@ export const tmdbBackfill = functions.pubsub
   });
 
 exports.tmdbBackfillMissing = require('./tmdbBackfill').default;
+exports.tmdbSearch = require('./tmdbSearch').default;
+
+export const tmdbFixMatch = functions.https.onRequest(async (req, res) => {
+    corsHandler(req, res, async () => {
+        if (req.method !== 'POST') {
+            return res.status(405).json({ error: 'Method Not Allowed' });
+        }
+        // This is a simplified version of the backfill logic for a single item
+        // In a real app, you would factor out the core logic from tmdbBackfill
+        return require('./tmdbBackfill').default(req, res);
+    });
+});

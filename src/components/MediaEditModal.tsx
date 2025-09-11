@@ -10,6 +10,11 @@ import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Search, Loader2 } from "lucide-react";
 import Image from "next/image";
+import { callFunction } from "@/lib/api";
+import { useToast } from "@/hooks/use-toast";
+import { ENV } from "@/lib/env";
+import { useAuthUser } from "@/hooks/useAuthUser";
+
 
 export interface MediaEditModalItem {
   id: string; // Firestore doc ID
@@ -30,7 +35,7 @@ interface MediaEditModalProps {
   item: MediaEditModalItem | null;
 }
 
-// Mock search result type
+// TMDB search result type
 type SearchResult = {
   id: number;
   title: string;
@@ -40,12 +45,15 @@ type SearchResult = {
 
 export function MediaEditModal({ open, onClose, item }: MediaEditModalProps) {
   const [activeTab, setActiveTab] = React.useState("match");
-  
+  const { toast } = useToast();
+  const { user } = useAuthUser();
+
   // State for Match tab
   const [searchQuery, setSearchQuery] = React.useState("");
   const [searchResults, setSearchResults] = React.useState<SearchResult[]>([]);
   const [selectedResult, setSelectedResult] = React.useState<SearchResult | null>(null);
   const [isSearching, setIsSearching] = React.useState(false);
+  const [isFixing, setIsFixing] = React.useState(false);
 
   // State for Artwork tab
   const [posterUrl, setPosterUrl] = React.useState("");
@@ -72,37 +80,62 @@ export function MediaEditModal({ open, onClose, item }: MediaEditModalProps) {
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!searchQuery || !item) return;
+    if (!searchQuery || !item || !user) return;
     setIsSearching(true);
     setSelectedResult(null);
-    console.log(`[MediaEditModal] Searching for ${item.kind}: "${searchQuery}"`);
-    
-    // MOCK NETWORK CALL
-    setTimeout(() => {
-        setSearchResults([
-            { id: 123, title: `${searchQuery} (Search Result 1)`, year: 2022, posterUrl: 'https://picsum.photos/seed/res1/185/278' },
-            { id: 456, title: "Another Movie", year: 2020, posterUrl: 'https://picsum.photos/seed/res2/185/278' },
-        ]);
+    setSearchResults([]);
+
+    try {
+        const idToken = await user.getIdToken();
+        const results = await callFunction<SearchResult[]>('tmdbSearch', {
+            q: searchQuery,
+            kind: item.kind === 'episode' ? 'tv' : 'movie',
+        }, idToken);
+        setSearchResults(results || []);
+    } catch (err: any) {
+        toast({ title: "Search failed", description: err.message, variant: 'destructive' });
+    } finally {
         setIsSearching(false);
-    }, 1000);
-  };
-  
-  const handleConfirmFix = () => {
-    if (!selectedResult || !item) return;
-    console.log(`[MediaEditModal] Confirming fix for item ${item.id} with TMDB ID ${selectedResult.id}`);
-    onClose();
+    }
   };
 
-  const handleSaveArtwork = () => {
+  const handleConfirmFix = async () => {
+    if (!selectedResult || !item || !user) return;
+    setIsFixing(true);
+
+    try {
+        const idToken = await user.getIdToken();
+        const payload = {
+            collection: item.collectionPath, // this is the full path, not just the name
+            docId: item.id,
+            tmdbId: selectedResult.id,
+            kind: item.kind === 'movie' ? 'movie' : 'tv',
+            includeCast: item.kind === 'movie', // only include cast for movies for now
+        };
+
+        await callFunction('tmdbFixMatch', payload, idToken);
+        
+        toast({ title: "Match Updated", description: `Successfully matched with "${selectedResult.title}".` });
+        onClose();
+    } catch (err: any) {
+        toast({ title: "Fix Match Failed", description: err.message, variant: 'destructive' });
+    } finally {
+        setIsFixing(false);
+    }
+  };
+
+  const handleSaveArtwork = async () => {
     if (!item) return;
     setIsSaving(true);
     console.log(`[MediaEditModal] Saving custom artwork for item ${item.id}`, { posterUrl, backdropUrl, trailerUrl });
     
-    // MOCK NETWORK CALL
-    setTimeout(() => {
-        setIsSaving(false);
-        onClose();
-    }, 1000);
+    // In a real app, this would call a function to update the Firestore doc
+    // e.g., callFunction('updateArtwork', { docPath: `${item.collectionPath}/${item.id}`, urls: { posterUrl, backdropUrl, trailerUrl }})
+    await new Promise(res => setTimeout(res, 1000));
+
+    setIsSaving(false);
+    toast({ title: "Artwork Saved", description: "Custom URLs have been saved." });
+    onClose();
   };
 
   if (!item) return null;
@@ -113,7 +146,7 @@ export function MediaEditModal({ open, onClose, item }: MediaEditModalProps) {
         <DialogHeader>
           <DialogTitle>Edit Media</DialogTitle>
           <DialogDescription>
-            Fix incorrect matches or manually set artwork for "{item.current.title}".
+            Fix incorrect matches or manually set artwork for "{item.current.title || item.current.showTitle}".
           </DialogDescription>
         </DialogHeader>
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
@@ -128,9 +161,9 @@ export function MediaEditModal({ open, onClose, item }: MediaEditModalProps) {
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder={item.kind === 'episode' ? "Search show title..." : "Search movie title..."}
-                disabled={isSearching}
+                disabled={isSearching || isFixing}
               />
-              <Button type="submit" disabled={isSearching || !searchQuery}>
+              <Button type="submit" disabled={isSearching || isFixing || !searchQuery}>
                 {isSearching ? <Loader2 className="animate-spin" /> : <Search />}
               </Button>
             </form>
@@ -140,9 +173,12 @@ export function MediaEditModal({ open, onClose, item }: MediaEditModalProps) {
                         <div 
                             key={result.id}
                             onClick={() => setSelectedResult(result)}
-                            className={`flex items-center gap-4 p-2 rounded-md cursor-pointer transition-colors ${selectedResult?.id === result.id ? 'bg-accent' : 'hover:bg-muted'}`}
+                            className={`flex items-center gap-4 p-2 rounded-md cursor-pointer transition-colors ${selectedResult?.id === result.id ? 'bg-accent text-accent-foreground' : 'hover:bg-muted'}`}
                         >
-                            <Image src={result.posterUrl || `https://picsum.photos/seed/${result.id}/50/75`} alt={result.title} width={50} height={75} className="rounded-sm bg-muted object-cover aspect-[2/3]" />
+                            {result.posterUrl ?
+                                <Image src={result.posterUrl} alt={result.title} width={50} height={75} className="rounded-sm bg-muted object-cover aspect-[2/3]" />
+                                : <div className="w-[50px] h-[75px] rounded-sm bg-muted flex items-center justify-center text-xs text-muted-foreground">No Art</div>
+                            }
                             <div>
                                 <p className="font-semibold">{result.title}</p>
                                 <p className="text-sm text-muted-foreground">{result.year}</p>
@@ -154,8 +190,11 @@ export function MediaEditModal({ open, onClose, item }: MediaEditModalProps) {
                 </div>
             </ScrollArea>
              <DialogFooter>
-                <Button variant="outline" onClick={onClose}>Cancel</Button>
-                <Button onClick={handleConfirmFix} disabled={!selectedResult}>Confirm Fix</Button>
+                <Button variant="outline" onClick={onClose} disabled={isFixing}>Cancel</Button>
+                <Button onClick={handleConfirmFix} disabled={!selectedResult || isFixing}>
+                  {isFixing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                  Confirm Fix
+                </Button>
             </DialogFooter>
           </TabsContent>
 
@@ -175,8 +214,8 @@ export function MediaEditModal({ open, onClose, item }: MediaEditModalProps) {
              <DialogFooter className="pt-4">
                 <Button variant="outline" onClick={onClose}>Cancel</Button>
                 <Button onClick={handleSaveArtwork} disabled={isSaving}>
-                    {isSaving && <Loader2 className="animate-spin" />}
-                    Save
+                    {isSaving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                    Save Artwork
                 </Button>
             </DialogFooter>
           </TabsContent>
