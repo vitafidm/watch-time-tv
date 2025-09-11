@@ -46,6 +46,7 @@ function deriveShowName(ep) {
     if (rawPath) {
         const segments = rawPath.split('/').filter(Boolean);
         if (segments.length > 1) {
+            // This is a naive assumption, real logic would be more complex
             return segments[segments.length - 2];
         }
     }
@@ -71,7 +72,7 @@ async function handleMovie(doc, includeCast) {
         updatePayload.posterUrl = (0, tmdbClient_1.posterUrl)(details.poster_path, 'w500');
     }
     if (!isPresent(data.backdropUrl) && !data.backdropLocked) {
-        updatePayload.backdropUrl = (0, tmdbClient_1.backdropUrl)(details.backdrop_path, 'w780');
+        updatePayload.backdropUrl = (0, tmdbClient_1.backdropUrl)(details.backdrop_path, 'original');
     }
     if (!isPresent(data.overview)) {
         updatePayload.overview = details.overview;
@@ -94,7 +95,7 @@ async function handleMovie(doc, includeCast) {
     if (includeCast && !isPresent(data.cast)) {
         updatePayload.cast = (details.credits?.cast || []).slice(0, 10).map((c) => ({
             name: c.name,
-            profileUrl: (0, tmdbClient_1.posterUrl)(c.profile_path, 'w500'),
+            profileUrl: (0, tmdbClient_1.posterUrl)(c.profile_path, 'w185'),
         }));
     }
     if (Object.keys(updatePayload).length > 0) {
@@ -118,7 +119,11 @@ async function handleEpisode(doc, includeCast) {
     if (!showDetails) {
         return { id: doc.id, matched: { tmdbShowId: showRes.id, title: showRes.name } };
     }
-    const showRef = initFirebase_1.db.collection('shows').doc(String(showDetails.id));
+    const userUid = doc.ref.parent.parent?.id;
+    if (!userUid) {
+        throw new Error('Could not determine user from doc path');
+    }
+    const showRef = initFirebase_1.db.collection(`users/${userUid}/shows`).doc(String(showDetails.id));
     // Create/merge show doc
     const showUpdate = {};
     const showDoc = await showRef.get();
@@ -126,7 +131,7 @@ async function handleEpisode(doc, includeCast) {
     if (!isPresent(showData.posterUrl) && !showData.posterLocked)
         showUpdate.posterUrl = (0, tmdbClient_1.posterUrl)(showDetails.poster_path, 'w500');
     if (!isPresent(showData.backdropUrl) && !showData.backdropLocked)
-        showUpdate.backdropUrl = (0, tmdbClient_1.backdropUrl)(showDetails.backdrop_path, 'w780');
+        showUpdate.backdropUrl = (0, tmdbClient_1.backdropUrl)(showDetails.backdrop_path, 'original');
     if (!isPresent(showData.overview))
         showUpdate.overview = showDetails.overview;
     if (!isPresent(showData.genres))
@@ -140,7 +145,7 @@ async function handleEpisode(doc, includeCast) {
     if (includeCast && !isPresent(showData.cast)) {
         showUpdate.cast = (showDetails.aggregate_credits?.cast || []).slice(0, 10).map((c) => ({
             name: c.name,
-            profileUrl: (0, tmdbClient_1.posterUrl)(c.profile_path, 'w500'),
+            profileUrl: (0, tmdbClient_1.posterUrl)(c.profile_path, 'w185'),
         }));
     }
     if (Object.keys(showUpdate).length > 0) {
@@ -148,12 +153,13 @@ async function handleEpisode(doc, includeCast) {
     }
     // Update episode doc
     const episodeUpdate = {};
+    const currentShowData = { ...showData, ...showUpdate };
     if (!isPresent(data.posterUrl) && !data.posterLocked)
-        episodeUpdate.posterUrl = showUpdate.posterUrl ?? showData.posterUrl;
+        episodeUpdate.posterUrl = currentShowData.posterUrl;
     if (!isPresent(data.overview))
-        episodeUpdate.overview = showUpdate.overview ?? showData.overview;
+        episodeUpdate.overview = currentShowData.overview;
     if (!isPresent(data.showTitle))
-        episodeUpdate.showTitle = showUpdate.title ?? showData.title;
+        episodeUpdate.showTitle = currentShowData.title;
     if (!isPresent(data.showRef))
         episodeUpdate.showRef = showRef.path;
     if (Object.keys(episodeUpdate).length > 0) {
@@ -169,12 +175,18 @@ exports.default = functions.https.onRequest(async (req, res) => {
     }
     const { collection: coll = 'media', kind = 'any', batchSize = 50, dryRun = true, startAfterId, includeCast = false, } = req.body;
     const limit = Math.min(200, Math.max(1, batchSize));
-    let query = initFirebase_1.db.collection(coll).orderBy(admin.firestore.FieldPath.documentId()).limit(limit);
+    const userUid = req.get('x-user-uid'); // Example of getting user context. In real app, use auth token.
+    if (!userUid) {
+        res.status(401).json({ message: "User not authenticated" });
+        return;
+    }
+    const collectionPath = `users/${userUid}/${coll}`;
+    let query = initFirebase_1.db.collection(collectionPath).orderBy(admin.firestore.FieldPath.documentId()).limit(limit);
     if (kind !== 'any') {
         query = query.where('type', '==', kind);
     }
     if (startAfterId) {
-        const startAfterDoc = await initFirebase_1.db.collection(coll).doc(startAfterId).get();
+        const startAfterDoc = await initFirebase_1.db.collection(collectionPath).doc(startAfterId).get();
         if (startAfterDoc.exists) {
             query = query.startAfter(startAfterDoc);
         }

@@ -1,6 +1,6 @@
 
 import * as functions from 'firebase-functions';
-import * as cors from 'cors';
+import cors from 'cors';
 import { db } from './initFirebase';
 import { pickYouTubeTrailer } from './titleHelpers';
 import { movieDetails, tvDetails, posterUrl, backdropUrl } from './tmdbClient';
