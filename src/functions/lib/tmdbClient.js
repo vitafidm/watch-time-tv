@@ -36,6 +36,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.tmdbFetch = tmdbFetch;
 exports.searchMovie = searchMovie;
 exports.searchTV = searchTV;
 exports.movieDetails = movieDetails;
@@ -97,10 +98,10 @@ async function searchTV(title, year, page = 1) {
     return tmdbFetch('search/tv', params);
 }
 async function movieDetails(id) {
-    return tmdbFetch(`movie/${id}`, { append_to_response: 'videos,credits' });
+    return tmdbFetch(`movie/${id}`, { append_to_response: 'videos,credits,images' });
 }
 async function tvDetails(id) {
-    return tmdbFetch(`tv/${id}`, { append_to_response: 'videos,aggregate_credits' });
+    return tmdbFetch(`tv/${id}`, { append_to_response: 'videos,aggregate_credits,images' });
 }
 function posterUrl(path, size = 'w500') {
     return path ? `${IMG_BASE_URL}${size}${path}` : null;
