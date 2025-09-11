@@ -43,16 +43,20 @@ async function tmdbFetch(path: string, params: Record<string, string>) {
     return response.json();
 }
 
-export async function searchMovie(title: string, year?: number | null): Promise<any> {
-    const params: Record<string, string> = { query: title, include_adult: 'false' };
+export async function searchMovie(title: string, year?: number | null, page: number = 1): Promise<any> {
+    const params: Record<string, string> = { query: title, include_adult: 'false', page: String(page) };
     if (year) {
         params.year = String(year);
     }
     return tmdbFetch('search/movie', params);
 }
 
-export async function searchTV(title: string): Promise<any> {
-    return tmdbFetch('search/tv', { query: title, include_adult: 'false' });
+export async function searchTV(title: string, year?: number | null, page: number = 1): Promise<any> {
+    const params: Record<string, string> = { query: title, include_adult: 'false', page: String(page) };
+    if (year) {
+        params.first_air_date_year = String(year);
+    }
+    return tmdbFetch('search/tv', params);
 }
 
 export async function movieDetails(id: number): Promise<any> {
@@ -63,7 +67,7 @@ export async function tvDetails(id:number): Promise<any> {
     return tmdbFetch(`tv/${id}`, { append_to_response: 'videos,aggregate_credits' });
 }
 
-export function posterUrl(path?: string, size: 'w500' | 'original' = 'w500'): string | null {
+export function posterUrl(path?: string, size: 'w185' | 'w500' | 'original' = 'w500'): string | null {
     return path ? `${IMG_BASE_URL}${size}${path}` : null;
 }
 
