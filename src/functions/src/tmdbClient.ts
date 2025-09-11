@@ -24,7 +24,7 @@ function getApiKey(): string {
 }
 
 
-async function tmdbFetch(path: string, params: Record<string, string>) {
+export async function tmdbFetch(path: string, params: Record<string, string>) {
     const apiKey = getApiKey();
     const url = new URL(`${TMDB_BASE_URL}/${path}`);
     url.searchParams.set('api_key', apiKey);
@@ -62,11 +62,11 @@ export async function searchTV(title: string, year?: number | null, page: number
 }
 
 export async function movieDetails(id: number): Promise<any> {
-    return tmdbFetch(`movie/${id}`, { append_to_response: 'videos,credits' });
+    return tmdbFetch(`movie/${id}`, { append_to_response: 'videos,credits,images' });
 }
 
 export async function tvDetails(id:number): Promise<any> {
-    return tmdbFetch(`tv/${id}`, { append_to_response: 'videos,aggregate_credits' });
+    return tmdbFetch(`tv/${id}`, { append_to_response: 'videos,aggregate_credits,images' });
 }
 
 export function posterUrl(path?: string, size: 'w185' | 'w500' | 'original' = 'w500'): string | null {
