@@ -1,3 +1,4 @@
+
 import * as functions from 'firebase-functions';
 import * as admin from 'firebase-admin';
 import { db } from './initFirebase';
@@ -14,6 +15,7 @@ function deriveShowName(ep: any): string {
     if (rawPath) {
         const segments = rawPath.split('/').filter(Boolean);
         if (segments.length > 1) {
+            // This is a naive assumption, real logic would be more complex
             return segments[segments.length - 2];
         }
     }
@@ -44,7 +46,7 @@ async function handleMovie(doc: admin.firestore.DocumentSnapshot, includeCast: b
         updatePayload.posterUrl = posterUrl(details.poster_path, 'w500');
     }
     if (!isPresent(data.backdropUrl) && !data.backdropLocked) {
-        updatePayload.backdropUrl = backdropUrl(details.backdrop_path, 'w780');
+        updatePayload.backdropUrl = backdropUrl(details.backdrop_path, 'original');
     }
     if (!isPresent(data.overview)) {
         updatePayload.overview = details.overview;
@@ -67,7 +69,7 @@ async function handleMovie(doc: admin.firestore.DocumentSnapshot, includeCast: b
     if (includeCast && !isPresent(data.cast)) {
         updatePayload.cast = (details.credits?.cast || []).slice(0, 10).map((c: any) => ({
             name: c.name,
-            profileUrl: posterUrl(c.profile_path, 'w500'),
+            profileUrl: posterUrl(c.profile_path, 'w185'),
         }));
     }
     
@@ -98,7 +100,11 @@ async function handleEpisode(doc: admin.firestore.DocumentSnapshot, includeCast:
         return { id: doc.id, matched: { tmdbShowId: showRes.id, title: showRes.name } };
     }
 
-    const showRef = db.collection('shows').doc(String(showDetails.id));
+    const userUid = doc.ref.parent.parent?.id;
+    if (!userUid) {
+        throw new Error('Could not determine user from doc path');
+    }
+    const showRef = db.collection(`users/${userUid}/shows`).doc(String(showDetails.id));
     
     // Create/merge show doc
     const showUpdate: Record<string, any> = {};
@@ -106,7 +112,7 @@ async function handleEpisode(doc: admin.firestore.DocumentSnapshot, includeCast:
     const showData = showDoc.exists ? showDoc.data()! : {};
 
     if (!isPresent(showData.posterUrl) && !showData.posterLocked) showUpdate.posterUrl = posterUrl(showDetails.poster_path, 'w500');
-    if (!isPresent(showData.backdropUrl) && !showData.backdropLocked) showUpdate.backdropUrl = backdropUrl(showDetails.backdrop_path, 'w780');
+    if (!isPresent(showData.backdropUrl) && !showData.backdropLocked) showUpdate.backdropUrl = backdropUrl(showDetails.backdrop_path, 'original');
     if (!isPresent(showData.overview)) showUpdate.overview = showDetails.overview;
     if (!isPresent(showData.genres)) showUpdate.genres = (showDetails.genres || []).map((g: any) => g.name);
     if (!isPresent(showData.firstAirDate)) showUpdate.firstAirDate = showDetails.first_air_date;
@@ -116,7 +122,7 @@ async function handleEpisode(doc: admin.firestore.DocumentSnapshot, includeCast:
     if (includeCast && !isPresent(showData.cast)) {
         showUpdate.cast = (showDetails.aggregate_credits?.cast || []).slice(0, 10).map((c: any) => ({
             name: c.name,
-            profileUrl: posterUrl(c.profile_path, 'w500'),
+            profileUrl: posterUrl(c.profile_path, 'w185'),
         }));
     }
 
@@ -126,9 +132,10 @@ async function handleEpisode(doc: admin.firestore.DocumentSnapshot, includeCast:
 
     // Update episode doc
     const episodeUpdate: Record<string, any> = {};
-    if (!isPresent(data.posterUrl) && !data.posterLocked) episodeUpdate.posterUrl = showUpdate.posterUrl ?? showData.posterUrl;
-    if (!isPresent(data.overview)) episodeUpdate.overview = showUpdate.overview ?? showData.overview;
-    if (!isPresent(data.showTitle)) episodeUpdate.showTitle = showUpdate.title ?? showData.title;
+    const currentShowData = {...showData, ...showUpdate};
+    if (!isPresent(data.posterUrl) && !data.posterLocked) episodeUpdate.posterUrl = currentShowData.posterUrl;
+    if (!isPresent(data.overview)) episodeUpdate.overview = currentShowData.overview;
+    if (!isPresent(data.showTitle)) episodeUpdate.showTitle = currentShowData.title;
     if (!isPresent(data.showRef)) episodeUpdate.showRef = showRef.path;
 
     if (Object.keys(episodeUpdate).length > 0) {
@@ -155,13 +162,21 @@ export default functions.https.onRequest(async (req, res) => {
     } = req.body;
 
     const limit = Math.min(200, Math.max(1, batchSize));
-    let query: admin.firestore.Query = db.collection(coll).orderBy(admin.firestore.FieldPath.documentId()).limit(limit);
+    const userUid = req.get('x-user-uid'); // Example of getting user context. In real app, use auth token.
+    if(!userUid){
+         res.status(401).json({ message: "User not authenticated"});
+         return;
+    }
+    const collectionPath = `users/${userUid}/${coll}`;
+
+
+    let query: admin.firestore.Query = db.collection(collectionPath).orderBy(admin.firestore.FieldPath.documentId()).limit(limit);
 
     if (kind !== 'any') {
         query = query.where('type', '==', kind);
     }
     if (startAfterId) {
-        const startAfterDoc = await db.collection(coll).doc(startAfterId).get();
+        const startAfterDoc = await db.collection(collectionPath).doc(startAfterId).get();
         if (startAfterDoc.exists) {
             query = query.startAfter(startAfterDoc);
         }

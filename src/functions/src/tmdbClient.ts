@@ -10,19 +10,19 @@ const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 function getApiKey(): string {
     try {
+        // This is the primary, recommended way for production.
         const key = functions.config().tmdb.key;
-        if (!key) {
-            throw new Error('TMDB API key is missing from function configuration.');
-        }
-        return key;
+        if (key) return key;
     } catch (e) {
-        // Fallback for local testing if not using functions config
+        // This is a fallback for local testing if functions.config() is not populated.
+        // `firebase functions:config:get` does not populate process.env automatically.
         if (process.env.TMDB_API_KEY) {
             return process.env.TMDB_API_KEY;
         }
-        throw new Error('TMDB API key not found in functions.config().tmdb.key or process.env.TMDB_API_KEY');
     }
+    throw new Error('TMDB API key not found. Set it with `firebase functions:config:set tmdb.key="YOUR_KEY"` or as TMDB_API_KEY in your local environment.');
 }
+
 
 async function tmdbFetch(path: string, params: Record<string, string>) {
     const apiKey = getApiKey();
@@ -38,6 +38,8 @@ async function tmdbFetch(path: string, params: Record<string, string>) {
     const response = await fetch(url.toString());
     if (!response.ok) {
         console.error(`TMDB API Error: ${response.status} for URL: ${url.toString()}`);
+        const errorBody = await response.text();
+        console.error('Error Body:', errorBody);
         return null;
     }
     return response.json();
