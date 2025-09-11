@@ -15,9 +15,11 @@ import { useToast } from "@/hooks/use-toast";
 import { ENV } from "@/lib/env";
 import { useInfiniteFirestore } from "@/hooks/useInfiniteFirestore";
 import { cleanMovieTitle } from "@/lib/movieTitle";
+import { MediaEditButton } from "@/components/MediaEditButton";
+import { MediaEditModal, type MediaEditModalItem } from "@/components/MediaEditModal";
 
 // A version of MediaCard that works with MediaDoc from Firestore
-function MediaDocCard({ item }: { item: MediaDoc & {id: string} }) {
+function MediaDocCard({ item, onEdit }: { item: MediaDoc & {id: string}, onEdit: () => void; }) {
     const displayTitle = useMemo(() => cleanMovieTitle(item as any), [item]);
 
     const mediaItem = useMemo(() => {
@@ -25,10 +27,8 @@ function MediaDocCard({ item }: { item: MediaDoc & {id: string} }) {
         let releaseDate = new Date().toISOString();
         if (item.addedAt) {
             if (typeof (item.addedAt as any).toDate === 'function') {
-                // It's a Firestore Timestamp
                 releaseDate = (item.addedAt as any).toDate().toISOString();
             } else if (typeof item.addedAt === 'string') {
-                // It's likely an ISO string
                 const d = new Date(item.addedAt);
                 if (!isNaN(d.getTime())) {
                     releaseDate = d.toISOString();
@@ -52,31 +52,32 @@ function MediaDocCard({ item }: { item: MediaDoc & {id: string} }) {
     }, [item]);
     
     return (
-        <Link href={`/media/${item.mediaId}`} className="group block" prefetch={false}>
-            <div className="flex flex-col gap-2">
-                <div className="relative aspect-[2/3] w-full overflow-hidden rounded-lg shadow-lg transition-all duration-300 group-hover:scale-105 group-hover:shadow-primary/40">
-                <Image
-                    src={mediaItem.poster_path}
-                    alt={mediaItem.title}
-                    width={500}
-                    height={750}
-                    className="object-cover bg-muted"
-                    data-ai-hint={`${item.type} poster`}
-                />
-                <div className="absolute top-2 right-2 z-10 opacity-0 transition-opacity duration-300 group-hover:opacity-100">
+        <div className="group block">
+            <div className="relative aspect-[2/3] w-full overflow-hidden rounded-lg shadow-lg transition-all duration-300 group-hover:scale-105 group-hover:shadow-primary/40">
+                <Link href={`/media/${item.mediaId}`} prefetch={false} className="block w-full h-full">
+                    <Image
+                        src={mediaItem.poster_path}
+                        alt={mediaItem.title}
+                        width={500}
+                        height={750}
+                        className="object-cover bg-muted"
+                        data-ai-hint={`${item.type} poster`}
+                    />
+                </Link>
+                <div className="absolute top-2 right-11 z-10 opacity-0 transition-opacity duration-300 group-hover:opacity-100">
                     <WatchlistButton item={mediaItem} asIcon />
                 </div>
-                </div>
-                <div className="space-y-1">
-                <h3 className="font-headline text-base font-bold text-foreground truncate">
-                    {displayTitle}
-                </h3>
-                <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                    <span>{item.year || new Date(mediaItem.release_date).getFullYear()}</span>
-                </div>
-                </div>
+                <MediaEditButton onOpen={onEdit} />
             </div>
-        </Link>
+            <div className="space-y-1 mt-2">
+            <h3 className="font-headline text-base font-bold text-foreground truncate">
+                {displayTitle}
+            </h3>
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <span>{item.year || new Date(mediaItem.release_date).getFullYear()}</span>
+            </div>
+            </div>
+        </div>
     );
 }
 
@@ -92,8 +93,23 @@ function MovieLibrary() {
 
   const { toast } = useToast();
   const [isEnriching, setIsEnriching] = useState(false);
+  const [editingItem, setEditingItem] = useState<MediaEditModalItem | null>(null);
+
   const sentinelRef = useRef(null);
   attachSentinel(sentinelRef.current);
+
+  const handleEdit = (item: MediaDoc & {id: string}) => {
+    if (!user) return;
+    setEditingItem({
+        id: item.id,
+        collectionPath: `users/${user.uid}/media`,
+        kind: 'movie',
+        current: {
+            title: item.title,
+            posterUrl: item.posterUrl,
+        }
+    });
+  };
 
   const handleEnrich = useCallback(async () => {
     if (!user || !movies || movies.length === 0 || !ENV.TMDB_ENRICH_URL) {
@@ -105,7 +121,6 @@ function MovieLibrary() {
 
     try {
         const idToken = await user.getIdToken();
-        // Enrich only the movies currently visible on the screen
         const itemsToEnrich = movies.map(m => ({
             mediaId: m.id,
             type: m.type,
@@ -169,7 +184,7 @@ function MovieLibrary() {
       {!showInitialLoading && movies.length > 0 && (
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 md:gap-6">
           {movies.map(item => (
-            <MediaDocCard key={item.id} item={item} />
+            <MediaDocCard key={item.id} item={item} onEdit={() => handleEdit(item)} />
           ))}
         </div>
       )}
@@ -183,6 +198,12 @@ function MovieLibrary() {
       )}
 
       {hasMore && <div ref={sentinelRef} className="h-10 w-full" />}
+      
+      <MediaEditModal 
+        open={!!editingItem}
+        onClose={() => setEditingItem(null)}
+        item={editingItem}
+      />
     </div>
   );
 }

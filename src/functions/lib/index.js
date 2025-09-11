@@ -5,6 +5,8 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 require("./initFirebase");
 const tmdbBackfill_1 = __importDefault(require("./tmdbBackfill"));
+const tmdbSearch_1 = __importDefault(require("./tmdbSearch"));
 // CommonJS export so Firebase finds the function
 exports.tmdbBackfillMissing = tmdbBackfill_1.default;
+exports.tmdbSearch = tmdbSearch_1.default;
 //# sourceMappingURL=index.js.map

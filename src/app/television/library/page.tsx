@@ -6,25 +6,28 @@ import ProtectedRoute from "@/components/ProtectedRoute";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tv } from "lucide-react";
 import type { MediaDoc } from "@/lib/db.types";
-import { useMemo, useRef } from "react";
+import { useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import { useInfiniteFirestore } from "@/hooks/useInfiniteFirestore";
 import { groupEpisodesByShow, ShowListItem, EpisodeDoc } from "@/lib/groupEpisodesByShow";
 import { deriveShowName } from "@/lib/showKey";
+import { MediaEditButton } from "@/components/MediaEditButton";
+import { MediaEditModal, type MediaEditModalItem } from "@/components/MediaEditModal";
 
-function ShowCard({ item }: { item: ShowListItem }) {
+function ShowCard({ item, onEdit }: { item: ShowListItem, onEdit: () => void; }) {
     return (
         <div role="button" aria-disabled="true" className="group block">
             <div className="flex flex-col gap-2">
                 <div className="relative aspect-[2/3] w-full overflow-hidden rounded-lg shadow-lg transition-all duration-300 group-hover:scale-105 group-hover:shadow-primary/40">
-                <Image
-                    src={item.posterUrl || `https://picsum.photos/500/750?random=${item.id}`}
-                    alt={item.title}
-                    width={500}
-                    height={750}
-                    className="object-cover bg-muted"
-                    data-ai-hint="tv show poster"
-                />
+                    <Image
+                        src={item.posterUrl || `https://picsum.photos/500/750?random=${item.id}`}
+                        alt={item.title}
+                        width={500}
+                        height={750}
+                        className="object-cover bg-muted"
+                        data-ai-hint="tv show poster"
+                    />
+                    <MediaEditButton onOpen={onEdit} />
                 </div>
                 <div className="space-y-1">
                   <h3 className="font-headline text-base font-bold text-foreground truncate">
@@ -49,10 +52,11 @@ function TvLibrary() {
       map: (doc) => ({ id: doc.id, ...doc.data() } as MediaDoc & {id: string}),
   });
 
+  const [editingItem, setEditingItem] = useState<MediaEditModalItem | null>(null);
+
   const shows = useMemo(() => {
     const grouped = groupEpisodesByShow(episodes as EpisodeDoc[]);
     
-    // Temporary debug log
     if (process.env.NODE_ENV === 'development' && episodes.length > 0) {
         console.table(episodes.slice(0, 10).map(ep => ({
             filename: ep.filename,
@@ -63,6 +67,19 @@ function TvLibrary() {
 
     return grouped;
   }, [episodes]);
+  
+  const handleEdit = (item: ShowListItem) => {
+    if (!user) return;
+    setEditingItem({
+        id: item.id,
+        collectionPath: `users/${user.uid}/media`, // Note: This is simplified, real logic might need to find all episodes for this show
+        kind: 'episode',
+        current: {
+            showTitle: item.title,
+            posterUrl: item.posterUrl,
+        }
+    });
+  };
 
   const sentinelRef = useRef(null);
   attachSentinel(sentinelRef.current);
@@ -91,7 +108,7 @@ function TvLibrary() {
       {!showInitialLoading && shows.length > 0 && (
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 md:gap-6">
           {shows.map(item => (
-            <ShowCard key={item.id} item={item} />
+            <ShowCard key={item.id} item={item} onEdit={() => handleEdit(item)} />
           ))}
         </div>
       )}
@@ -105,7 +122,12 @@ function TvLibrary() {
       )}
       
       {hasMore && <div ref={sentinelRef} className="h-10 w-full" />}
-
+      
+      <MediaEditModal 
+        open={!!editingItem}
+        onClose={() => setEditingItem(null)}
+        item={editingItem}
+      />
     </div>
   );
 }

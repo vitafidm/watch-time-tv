@@ -80,15 +80,19 @@ async function tmdbFetch(path, params) {
     }
     return response.json();
 }
-async function searchMovie(title, year) {
-    const params = { query: title, include_adult: 'false' };
+async function searchMovie(title, year, page = 1) {
+    const params = { query: title, include_adult: 'false', page: String(page) };
     if (year) {
         params.year = String(year);
     }
     return tmdbFetch('search/movie', params);
 }
-async function searchTV(title) {
-    return tmdbFetch('search/tv', { query: title, include_adult: 'false' });
+async function searchTV(title, year, page = 1) {
+    const params = { query: title, include_adult: 'false', page: String(page) };
+    if (year) {
+        params.first_air_date_year = String(year);
+    }
+    return tmdbFetch('search/tv', params);
 }
 async function movieDetails(id) {
     return tmdbFetch(`movie/${id}`, { append_to_response: 'videos,credits' });
