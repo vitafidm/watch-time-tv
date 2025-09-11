@@ -7,12 +7,14 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Search, Loader2 } from "lucide-react";
+import { Search, Loader2, Video, Images, Image as ImageIcon } from "lucide-react";
 import Image from "next/image";
 import { callFunction } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
 import { useAuthUser } from "@/hooks/useAuthUser";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { cn } from "@/lib/utils";
 
 export interface MediaEditModalItem {
   id: string; // Firestore doc ID
@@ -20,6 +22,8 @@ export interface MediaEditModalItem {
   kind: 'movie' | 'episode';
   current: {
     title?: string;
+    tmdbId?: number;
+    showRef?: string; // For episodes, path like 'users/uid/shows/showid'
     posterUrl?: string | null;
     backdropUrl?: string | null;
     videoLink?: string | null;
@@ -34,7 +38,6 @@ interface MediaEditModalProps {
   onApplied?: (id: string, patch: Partial<any>) => void;
 }
 
-// TMDB search result type
 type SearchResult = {
   id: number;
   title: string;
@@ -42,42 +45,67 @@ type SearchResult = {
   posterUrl: string | null;
 };
 
+type TmdbMediaData = {
+  posters: { url: string }[];
+  backdrops: { url: string }[];
+  videos: { key: string; name: string; type: string; thumbnailUrl: string }[];
+};
+
 export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModalProps) {
   const { toast } = useToast();
   const { user } = useAuthUser();
 
-  // State for Matching
   const [searchQuery, setSearchQuery] = React.useState("");
   const [searchResults, setSearchResults] = React.useState<SearchResult[]>([]);
   const [isSearching, setIsSearching] = React.useState(false);
   const [selectedMatch, setSelectedMatch] = React.useState<{ kind: 'movie' | 'tv'; tmdbId: number; title: string; } | null>(null);
   const [updateDisplayedTitle, setUpdateDisplayedTitle] = React.useState(true);
   const [isFixing, setIsFixing] = React.useState(false);
-
-  // State for Artwork
-  const [posterUrl, setPosterUrl] = React.useState("");
-  const [backdropUrl, setBackdropUrl] = React.useState("");
-  const [trailerUrl, setTrailerUrl] = React.useState("");
-  const [isSaving, setIsSaving] = React.useState(false);
   
-  const displayTitle = item?.current.title || item?.current.showTitle || "Unknown Media";
+  const [mediaData, setMediaData] = React.useState<TmdbMediaData | null>(null);
+  const [isFetchingMedia, setIsFetchingMedia] = React.useState(false);
+  const [artworkSaving, setArtworkSaving] = React.useState<{ type: 'poster'|'backdrop'|'video', url: string } | null>(null);
+
+  const displayTitle = item?.current.showTitle || item?.current.title || "Unknown Media";
+  const isMovie = item?.kind === 'movie';
+
+  const fetchMediaData = React.useCallback(async (kind: 'movie' | 'tv', tmdbId: number) => {
+    if (!user) return;
+    setIsFetchingMedia(true);
+    setMediaData(null);
+    try {
+      const idToken = await user.getIdToken();
+      const data = await callFunction<TmdbMediaData>('tmdbMedia', { kind, tmdbId }, idToken);
+      setMediaData(data);
+    } catch (error: any) {
+      toast({ title: "Failed to fetch media assets", description: error.message, variant: "destructive" });
+    } finally {
+      setIsFetchingMedia(false);
+    }
+  }, [user, toast]);
 
   React.useEffect(() => {
     if (item) {
-      // Pre-fill search with current title
       const titleToSearch = item.kind === 'episode' ? item.current.showTitle : item.current.title;
       setSearchQuery(titleToSearch || "");
-
-      // Pre-fill artwork URLs
-      setPosterUrl(item.current.posterUrl || "");
-      setBackdropUrl(item.current.backdropUrl || "");
-      setTrailerUrl(item.current.videoLink || "");
-
-      // Reset search state
       setSearchResults([]);
       setSelectedMatch(null);
+      setMediaData(null);
+
+      const currentTmdbId = item.current.tmdbId || (item.current.showRef?.split('/').pop() ? Number(item.current.showRef.split('/').pop()) : undefined);
+
+      if (currentTmdbId) {
+        fetchMediaData(isMovie ? 'movie' : 'tv', currentTmdbId);
+      }
     }
-  }, [item]);
+  }, [item, isMovie, fetchMediaData]);
+  
+  React.useEffect(() => {
+    if (selectedMatch) {
+      fetchMediaData(selectedMatch.kind, selectedMatch.tmdbId);
+    }
+  }, [selectedMatch, fetchMediaData]);
+
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -85,23 +113,22 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
     setIsSearching(true);
     setSelectedMatch(null);
     setSearchResults([]);
-
     try {
-        const idToken = await user.getIdToken();
-        const kind = item.kind === 'episode' ? 'tv' : 'movie';
-        const results = await callFunction<SearchResult[]>('tmdbSearch', { q: searchQuery, kind }, idToken);
-        setSearchResults(results || []);
+      const idToken = await user.getIdToken();
+      const kind = isMovie ? 'movie' : 'tv';
+      const results = await callFunction<SearchResult[]>('tmdbSearch', { q: searchQuery, kind }, idToken);
+      setSearchResults(results || []);
     } catch (err: any) {
-        toast({ title: "Search failed", description: err.message, variant: 'destructive' });
+      toast({ title: "Search failed", description: err.message, variant: 'destructive' });
     } finally {
-        setIsSearching(false);
+      setIsSearching(false);
     }
   };
 
   const handleSelectMatch = (result: SearchResult) => {
     if (!item) return;
     setSelectedMatch({
-      kind: item.kind === 'episode' ? 'tv' : 'movie',
+      kind: isMovie ? 'movie' : 'tv',
       tmdbId: result.id,
       title: result.title,
     });
@@ -110,80 +137,66 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
   const handleConfirmFix = async () => {
     if (!selectedMatch || !item || !user) return;
     setIsFixing(true);
-
-    try {
-        const idToken = await user.getIdToken();
-        const payload = {
-            collection: item.collectionPath,
-            docId: item.id,
-            kind: selectedMatch.kind,
-            tmdbId: selectedMatch.tmdbId,
-            includeCast: true, 
-        };
-
-        const result = await callFunction('tmdbFixMatch', payload, idToken);
-        
-        toast({ title: "Match Updated", description: `Successfully matched with "${selectedMatch.title}".` });
-        
-        const patch: Partial<any> = {};
-        if (updateDisplayedTitle) {
-          patch.title = selectedMatch.title;
-          patch.showTitle = selectedMatch.title;
-        }
-
-        onApplied?.(item.id, patch);
-        onClose();
-    } catch (err: any) {
-        toast({ title: "Fix Match Failed", description: err.message, variant: 'destructive' });
-    } finally {
-        setIsFixing(false);
-    }
-  };
-
-  const handleSaveArtwork = async () => {
-    if (!item || !user) return;
-    setIsSaving(true);
-    
     try {
       const idToken = await user.getIdToken();
-      const payload: { collection: string; docId: string; posterUrl?: string; backdropUrl?: string; videoLink?: string } = {
+      const payload = {
         collection: item.collectionPath,
         docId: item.id,
+        kind: selectedMatch.kind,
+        tmdbId: selectedMatch.tmdbId,
+        updateDisplayTitle: updateDisplayedTitle,
+        includeCast: true,
       };
-
+      await callFunction('tmdbFixMatch', payload, idToken);
+      toast({ title: "Match Updated", description: `Successfully matched with "${selectedMatch.title}".` });
+      
       const patch: Partial<any> = {};
-
-      if (posterUrl !== (item.current.posterUrl || '')) {
-        payload.posterUrl = posterUrl;
-        patch.posterUrl = posterUrl;
+      if (updateDisplayedTitle) {
+        patch[isMovie ? 'title' : 'showTitle'] = selectedMatch.title;
       }
-      if (backdropUrl !== (item.current.backdropUrl || '')) {
-        payload.backdropUrl = backdropUrl;
-        patch.backdropUrl = backdropUrl;
-      }
-      if (trailerUrl !== (item.current.videoLink || '')) {
-        payload.videoLink = trailerUrl;
-        patch.videoLink = trailerUrl;
-      }
-
-      if (Object.keys(patch).length === 0) {
-        toast({ title: "No Changes", description: "The artwork URLs are the same." });
-        setIsSaving(false);
-        return;
-      }
-
-      await callFunction('tmdbManualSet', payload, idToken);
-
-      toast({ title: "Artwork Saved", description: "Custom URLs have been saved and locked." });
       onApplied?.(item.id, patch);
       onClose();
-
     } catch (err: any) {
-      toast({ title: "Save Artwork Failed", description: err.message, variant: 'destructive' });
+      toast({ title: "Fix Match Failed", description: err.message, variant: 'destructive' });
     } finally {
-      setIsSaving(false);
+      setIsFixing(false);
     }
   };
+
+  const handleManualSet = async (type: 'poster'|'backdrop'|'video', value: string) => {
+    if (!item || !user) return;
+
+    const url = type === 'video' ? `https://www.youtube.com/watch?v=${value}` : value;
+    setArtworkSaving({ type, url });
+
+    const payload: { collection: string; docId: string; posterUrl?: string; backdropUrl?: string; videoLink?: string } = {
+        collection: item.collectionPath,
+        docId: item.id,
+    };
+    const patch: Partial<any> = {};
+
+    if (type === 'poster') {
+        payload.posterUrl = url;
+        patch.posterUrl = url;
+    } else if (type === 'backdrop') {
+        payload.backdropUrl = url;
+        patch.backdropUrl = url;
+    } else if (type === 'video') {
+        payload.videoLink = url;
+        patch.videoLink = url;
+    }
+
+    try {
+        await callFunction('tmdbManualSet', payload, user.getIdToken());
+        toast({ title: "Artwork Updated", description: `The ${type} has been set.` });
+        onApplied?.(item.id, patch);
+    } catch (err: any) {
+        toast({ title: "Save Failed", description: err.message, variant: 'destructive' });
+    } finally {
+        setArtworkSaving(null);
+    }
+  };
+
 
   if (!item) return null;
 
@@ -203,7 +216,7 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
                 <div className="flex gap-4">
                     <div className="w-24 flex-shrink-0">
                         <Image 
-                            src={item.current.posterUrl || '/placeholder.png'} 
+                            src={item.current.posterUrl || `https://picsum.photos/seed/${item.id}/100/150`}
                             alt={displayTitle}
                             width={100}
                             height={150}
@@ -220,7 +233,7 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
                     <Input 
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
-                        placeholder={item.kind === 'episode' ? "Search show title..." : "Search movie title..."}
+                        placeholder={isMovie ? "Search movie title..." : "Search show title..."}
                         disabled={isSearching || isFixing}
                     />
                     <Button type="submit" disabled={isSearching || isFixing || !searchQuery}>
@@ -234,7 +247,7 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
                             <div 
                                 key={result.id}
                                 onClick={() => handleSelectMatch(result)}
-                                className={`flex items-center gap-3 p-2 rounded-md cursor-pointer transition-colors ${selectedMatch?.tmdbId === result.id ? 'bg-accent text-accent-foreground' : 'hover:bg-muted'}`}
+                                className={cn('flex items-center gap-3 p-2 rounded-md cursor-pointer transition-colors', selectedMatch?.tmdbId === result.id ? 'bg-accent text-accent-foreground' : 'hover:bg-muted')}
                             >
                                 {result.posterUrl ?
                                     <Image src={result.posterUrl} alt={result.title} width={40} height={60} className="rounded-sm bg-muted object-cover aspect-[2/3]" />
@@ -262,27 +275,65 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
                 </Button>
             </div>
 
-            {/* Right Column: Artwork */}
+            {/* Right Column: Artwork Galleries */}
             <div className="space-y-4">
-                <h3 className="font-semibold text-lg border-b pb-2">Manual Overrides</h3>
-                <div className="space-y-2">
-                    <Label htmlFor="posterUrl">Poster URL</Label>
-                    <Input id="posterUrl" value={posterUrl} onChange={e => setPosterUrl(e.target.value)} placeholder="https://..." disabled={isSaving} />
+              <Tabs defaultValue="posters" className="w-full">
+                <TabsList>
+                  <TabsTrigger value="posters"><ImageIcon className="mr-2"/> Posters</TabsTrigger>
+                  <TabsTrigger value="backdrops"><Images className="mr-2"/> Backdrops</TabsTrigger>
+                  <TabsTrigger value="trailers"><Video className="mr-2"/> Trailers</TabsTrigger>
+                </TabsList>
+                <div className="pt-4 min-h-[360px]">
+                  {isFetchingMedia && <div className="flex items-center justify-center h-full"><Loader2 className="animate-spin text-muted-foreground" /></div>}
+                  {!isFetchingMedia && mediaData && (
+                    <>
+                      <TabsContent value="posters">
+                        <ScrollArea className="h-[360px]">
+                          <div className="grid grid-cols-4 gap-2 pr-4">
+                            {mediaData.posters.map(p => (
+                              <button key={p.url} onClick={() => handleManualSet('poster', p.url)} className="relative aspect-[2/3] rounded-md overflow-hidden group">
+                                <Image src={p.url} alt="Poster" fill className="object-cover" />
+                                {artworkSaving?.type === 'poster' && artworkSaving.url === p.url && <div className="absolute inset-0 bg-black/50 flex items-center justify-center"><Loader2 className="animate-spin text-white"/></div>}
+                              </button>
+                            ))}
+                          </div>
+                        </ScrollArea>
+                      </TabsContent>
+                      <TabsContent value="backdrops">
+                        <ScrollArea className="h-[360px]">
+                          <div className="grid grid-cols-2 gap-2 pr-4">
+                            {mediaData.backdrops.map(b => (
+                              <button key={b.url} onClick={() => handleManualSet('backdrop', b.url)} className="relative aspect-video rounded-md overflow-hidden group">
+                                <Image src={b.url} alt="Backdrop" fill className="object-cover" />
+                                {artworkSaving?.type === 'backdrop' && artworkSaving.url === b.url && <div className="absolute inset-0 bg-black/50 flex items-center justify-center"><Loader2 className="animate-spin text-white"/></div>}
+                              </button>
+                            ))}
+                          </div>
+                        </ScrollArea>
+                      </TabsContent>
+                      <TabsContent value="trailers">
+                         <ScrollArea className="h-[360px]">
+                            <div className="space-y-2 pr-4">
+                              {mediaData.videos.map(v => (
+                                <button key={v.key} onClick={() => handleManualSet('video', v.key)} className="w-full flex items-center gap-3 p-2 rounded-md hover:bg-muted group">
+                                  <div className="w-24 aspect-video relative rounded-md overflow-hidden shrink-0">
+                                    <Image src={v.thumbnailUrl} alt={v.name} fill className="object-cover"/>
+                                     {artworkSaving?.type === 'video' && `https://www.youtube.com/watch?v=${v.key}` === artworkSaving.url && <div className="absolute inset-0 bg-black/50 flex items-center justify-center"><Loader2 className="animate-spin text-white"/></div>}
+                                  </div>
+                                  <div className="text-left">
+                                      <p className="text-sm font-medium">{v.name}</p>
+                                      <p className="text-xs text-muted-foreground">{v.type}</p>
+                                  </div>
+                                </button>
+                              ))}
+                            </div>
+                         </ScrollArea>
+                      </TabsContent>
+                    </>
+                  )}
+                   {!isFetchingMedia && !mediaData && <div className="flex flex-col items-center justify-center h-full text-muted-foreground text-center"><ImageIcon/><p className="mt-2 text-sm">Select a match to see media</p></div>}
                 </div>
-                <div className="space-y-2">
-                    <Label htmlFor="backdropUrl">Backdrop URL</Label>
-                    <Input id="backdropUrl" value={backdropUrl} onChange={e => setBackdropUrl(e.target.value)} placeholder="https://..." disabled={isSaving} />
-                </div>
-                <div className="space-y-2">
-                    <Label htmlFor="trailerUrl">Trailer URL (YouTube)</Label>
-                    <Input id="trailerUrl" value={trailerUrl} onChange={e => setTrailerUrl(e.target.value)} placeholder="https://www.youtube.com/watch?v=..." disabled={isSaving} />
-                </div>
-                <div className="flex justify-end pt-4">
-                    <Button onClick={handleSaveArtwork} disabled={isSaving}>
-                        {isSaving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                        Save Artwork
-                    </Button>
-                </div>
+              </Tabs>
             </div>
         </div>
         <DialogFooter className="pt-6">
