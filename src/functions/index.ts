@@ -9,6 +9,7 @@ import { playbackReportFlow } from './flows/playback-report-flow';
 import { tmdbEnrichFlow, tmdbBackfillSweep } from "./flows/tmdb-enrich-flow";
 import tmdbFixMatch from "./src/tmdbFixMatch";
 import tmdbSearch from "./src/tmdbSearch";
+import tmdbManualSet from "./src/tmdbManualSet";
 
 // Initialize Firebase Admin SDK.
 if (!admin.apps.length) {
@@ -289,3 +290,5 @@ export const tmdbBackfill = functions.pubsub
 exports.tmdbBackfillMissing = require('./tmdbBackfill').default;
 exports.tmdbSearch = tmdbSearch;
 exports.tmdbFixMatch = tmdbFixMatch;
+exports.tmdbManualSet = tmdbManualSet;
+

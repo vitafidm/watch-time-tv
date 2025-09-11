@@ -125,17 +125,45 @@ export function MediaEditModal({ open, onClose, item }: MediaEditModalProps) {
   };
 
   const handleSaveArtwork = async () => {
-    if (!item) return;
+    if (!item || !user) return;
     setIsSaving(true);
-    console.log(`[MediaEditModal] Saving custom artwork for item ${item.id}`, { posterUrl, backdropUrl, trailerUrl });
     
-    // In a real app, this would call a function to update the Firestore doc
-    // e.g., callFunction('updateArtwork', { docPath: `${item.collectionPath}/${item.id}`, urls: { posterUrl, backdropUrl, trailerUrl }})
-    await new Promise(res => setTimeout(res, 1000));
+    try {
+      const idToken = await user.getIdToken();
+      const payload: { collection: string; docId: string; posterUrl?: string; backdropUrl?: string; videoLink?: string } = {
+        collection: item.collectionPath,
+        docId: item.id,
+      };
 
-    setIsSaving(false);
-    toast({ title: "Artwork Saved", description: "Custom URLs have been saved." });
-    onClose();
+      let hasChanges = false;
+      if (posterUrl !== (item.current.posterUrl || '')) {
+        payload.posterUrl = posterUrl;
+        hasChanges = true;
+      }
+      if (backdropUrl !== (item.current.backdropUrl || '')) {
+        payload.backdropUrl = backdropUrl;
+        hasChanges = true;
+      }
+      if (trailerUrl !== (item.current.videoLink || '')) {
+        payload.videoLink = trailerUrl;
+        hasChanges = true;
+      }
+
+      if (!hasChanges) {
+        toast({ title: "No Changes", description: "The artwork URLs are the same." });
+        return;
+      }
+
+      await callFunction('tmdbManualSet', payload, idToken);
+
+      toast({ title: "Artwork Saved", description: "Custom URLs have been saved and locked." });
+      onClose();
+
+    } catch (err: any) {
+      toast({ title: "Save Artwork Failed", description: err.message, variant: 'destructive' });
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   if (!item) return null;
