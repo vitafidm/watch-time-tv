@@ -10,7 +10,7 @@ const corsHandler = cors({ origin: true });
 // Helper to check if a value is present (not null, undefined, or empty string)
 const isPresent = (val: any) => val !== undefined && val !== null && val !== '';
 
-async function handleMovieFix(docRef: FirebaseFirestore.DocumentReference, tmdbId: number, includeCast: boolean) {
+async function handleMovieFix(docRef: FirebaseFirestore.DocumentReference, tmdbId: number, includeCast: boolean, updateDisplayTitle?: boolean) {
     const docSnap = await docRef.get();
     if (!docSnap.exists) {
         throw new functions.https.HttpsError('not-found', 'Document not found.');
@@ -27,7 +27,6 @@ async function handleMovieFix(docRef: FirebaseFirestore.DocumentReference, tmdbI
 
     const fieldMap: Record<string, () => any> = {
         tmdbId: () => details.id,
-        title: () => details.title,
         posterUrl: () => !data.posterLocked ? posterUrl(details.poster_path, 'w500') : undefined,
         backdropUrl: () => !data.backdropLocked ? backdropUrl(details.backdrop_path, 'original') : undefined,
         overview: () => details.overview,
@@ -42,6 +41,12 @@ async function handleMovieFix(docRef: FirebaseFirestore.DocumentReference, tmdbI
         })) : undefined,
     };
     
+    // Always update the title if the flag is set
+    if (updateDisplayTitle && details.title) {
+        updatePayload.title = details.title;
+        updatedFields.push('title');
+    }
+
     for (const [key, valueFn] of Object.entries(fieldMap)) {
         if (!isPresent(data[key])) {
             const value = valueFn();
@@ -60,7 +65,7 @@ async function handleMovieFix(docRef: FirebaseFirestore.DocumentReference, tmdbI
 }
 
 
-async function handleTVEpisodeFix(docRef: FirebaseFirestore.DocumentReference, tmdbShowId: number, includeCast: boolean) {
+async function handleTVEpisodeFix(docRef: FirebaseFirestore.DocumentReference, tmdbShowId: number, includeCast: boolean, updateDisplayTitle?: boolean) {
     const docSnap = await docRef.get();
     if (!docSnap.exists) {
         throw new functions.https.HttpsError('not-found', 'Episode document not found.');
@@ -84,10 +89,15 @@ async function handleTVEpisodeFix(docRef: FirebaseFirestore.DocumentReference, t
     const showDoc = await showRef.get();
     const showData = showDoc.exists ? showDoc.data()! : {};
 
+    // Always update show title if the flag is set (or if it's new)
+    if ((updateDisplayTitle || !isPresent(showData.title)) && showDetails.name) {
+        showUpdatePayload.title = showDetails.name;
+        showUpdatedFields.push('title');
+    }
+
     const showFieldMap: Record<string, () => any> = {
-        title: () => showDetails.name,
-        posterUrl: () => posterUrl(showDetails.poster_path, 'w500'),
-        backdropUrl: () => backdropUrl(showDetails.backdrop_path, 'original'),
+        posterUrl: () => !showData.posterLocked ? posterUrl(showDetails.poster_path, 'w500') : undefined,
+        backdropUrl: () => !showData.backdropLocked ? backdropUrl(showDetails.backdrop_path, 'original') : undefined,
         overview: () => showDetails.overview,
         genres: () => (showDetails.genres || []).map((g: any) => g.name),
         firstAirDate: () => showDetails.first_air_date,
@@ -116,11 +126,16 @@ async function handleTVEpisodeFix(docRef: FirebaseFirestore.DocumentReference, t
     const episodeUpdatedFields: string[] = [];
     const currentShowData = { ...showData, ...showUpdatePayload };
 
+    // Always update episode's showTitle if flag is set
+    if (updateDisplayTitle && currentShowData.title) {
+        episodeUpdatePayload.showTitle = currentShowData.title;
+        episodeUpdatedFields.push('showTitle');
+    }
+
     const episodeFieldMap: Record<string, () => any> = {
         showRef: () => showRef.path,
-        showTitle: () => currentShowData.title,
-        posterUrl: () => currentShowData.posterUrl,
-        backdropUrl: () => currentShowData.backdropUrl,
+        posterUrl: () => !data.posterLocked ? currentShowData.posterUrl : undefined,
+        backdropUrl: () => !data.backdropLocked ? currentShowData.backdropUrl : undefined,
         overview: () => currentShowData.overview, // Inherit show overview if episode has none
     };
 
@@ -159,7 +174,8 @@ export default functions.https.onRequest((req, res) => {
                 docId,
                 kind,
                 tmdbId,
-                includeCast = true
+                includeCast = true,
+                updateDisplayTitle = false
             } = req.body;
 
             if (!collection || !docId || !kind || !tmdbId) {
@@ -170,9 +186,9 @@ export default functions.https.onRequest((req, res) => {
 
             let result;
             if (kind === 'movie') {
-                result = await handleMovieFix(docRef, tmdbId, includeCast);
+                result = await handleMovieFix(docRef, tmdbId, includeCast, updateDisplayTitle);
             } else if (kind === 'tv') {
-                result = await handleTVEpisodeFix(docRef, tmdbId, includeCast);
+                result = await handleTVEpisodeFix(docRef, tmdbId, includeCast, updateDisplayTitle);
             } else {
                 throw new functions.https.HttpsError('invalid-argument', 'Invalid "kind" specified. Must be "movie" or "tv".');
             }
