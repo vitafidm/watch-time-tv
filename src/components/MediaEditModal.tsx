@@ -1,4 +1,3 @@
-
 "use client";
 
 import * as React from "react";
@@ -28,6 +27,7 @@ export interface MediaEditModalItem {
     backdropUrl?: string | null;
     videoLink?: string | null;
     showTitle?: string;
+    displayTitle?: string | null;
   };
 }
 
@@ -52,16 +52,15 @@ type TmdbMediaData = {
 };
 
 function tmdbIdFromShowRef(ref?: string | null): number | null {
-    if (!ref) return null;
-    const m = ref.match(/\/shows\/(\d+)/);
-    return m ? Number(m[1]) : null;
+  if (!ref) return null;
+  const m = ref.match(/\/shows\/(\d+)/);
+  return m ? Number(m[1]) : null;
 }
 
 function titleForSearch(item: MediaEditModalItem | null): string | null {
-    if (!item) return null;
-    return item.current?.showTitle || item.current?.title || null;
+  if (!item) return null;
+  return item.current?.displayTitle || item.current?.showTitle || item.current?.title || null;
 }
-
 
 export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModalProps) {
   const { toast } = useToast();
@@ -70,16 +69,17 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
   const [searchQuery, setSearchQuery] = React.useState("");
   const [searchResults, setSearchResults] = React.useState<SearchResult[]>([]);
   const [isSearching, setIsSearching] = React.useState(false);
-  const [updateDisplayedTitle, setUpdateDisplayedTitle] = React.useState(true);
+
+  // ✅ unified & correctly named state
+  const [updateDisplayTitle, setUpdateDisplayTitle] = React.useState(true);
+
   const [isFixing, setIsFixing] = React.useState(false);
-  
   const [selectedMatch, setSelectedMatch] = React.useState<{ kind: 'movie' | 'tv'; tmdbId: number; title: string; } | null>(null);
   const [mediaData, setMediaData] = React.useState<{ posters:any[], backdrops:any[], videos:any[] } | null>(null);
   const [mediaLoading, setMediaLoading] = React.useState(false);
-
   const [artworkSaving, setArtworkSaving] = React.useState<{ type: 'poster'|'backdrop'|'video', url: string } | null>(null);
 
-  const displayTitle = item?.current.showTitle || item?.current.title || "Unknown Media";
+  const displayTitleText = item?.current.displayTitle || item?.current.showTitle || item?.current.title || "Unknown Media";
   const isMovie = item?.kind === 'movie';
 
   const fetchMediaData = React.useCallback(async (kind: 'movie' | 'tv', tmdbId: number) => {
@@ -96,62 +96,62 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
     }
   }, [user, toast]);
 
-    React.useEffect(() => {
-        if (!open || !item) {
-            setSearchQuery("");
-            setSearchResults([]);
-            setSelectedMatch(null);
-            setMediaData(null);
-            return;
+  React.useEffect(() => {
+    if (!open || !item) {
+      setSearchQuery("");
+      setSearchResults([]);
+      setSelectedMatch(null);
+      setMediaData(null);
+      return;
+    }
+
+    const isMovie = item.kind === 'movie';
+
+    async function preload() {
+      setSearchQuery(titleForSearch(item) || "");
+
+      const existingMovieId = isMovie ? item.current?.tmdbId : null;
+      const existingShowId = !isMovie ? tmdbIdFromShowRef(item.current?.showRef) : null;
+      let tmdbId: number | null = existingMovieId ?? existingShowId ?? null;
+      let matchTitle: string | null = null;
+
+      // If we don't already have an id, do a soft search to find one for preview
+      if (!tmdbId) {
+        const q = titleForSearch(item);
+        if (q) {
+          try {
+            const results = await callFunction<any[]>('tmdbSearch', { q, kind: isMovie ? 'movie' : 'tv' });
+            if (Array.isArray(results) && results.length > 0) {
+              tmdbId = results[0].id;
+              matchTitle = results[0].title ?? q;
+              setSelectedMatch({ kind: isMovie ? 'movie' : 'tv', tmdbId, title: matchTitle });
+            }
+          } catch {
+            // ignore
+          }
         }
+      } else {
+        // We already know the id; set a selectedMatch for convenience (preview only)
+        matchTitle = titleForSearch(item) || '';
+        setSelectedMatch({ kind: isMovie ? 'movie' : 'tv', tmdbId, title: matchTitle });
+      }
 
-        const isMovie = item.kind === 'movie';
-        
-        async function preload() {
-            setSearchQuery(titleForSearch(item) || "");
-            
-            const existingMovieId = isMovie ? item.current?.tmdbId : null;
-            const existingShowId = !isMovie ? tmdbIdFromShowRef(item.current?.showRef) : null;
-            let tmdbId: number | null = existingMovieId ?? existingShowId ?? null;
-            let matchTitle: string | null = null;
-            
-            // If we don't already have an id, do a soft search to find one for preview
-            if (!tmdbId) {
-                const q = titleForSearch(item);
-                if (q) {
-                    try {
-                        const results = await callFunction<any[]>('tmdbSearch', { q, kind: isMovie ? 'movie' : 'tv' });
-                        if (Array.isArray(results) && results.length > 0) {
-                            tmdbId = results[0].id;
-                            matchTitle = results[0].title ?? q;
-                            // Preview-only: set selectedMatch so right column knows what to load
-                            setSelectedMatch({ kind: isMovie ? 'movie' : 'tv', tmdbId, title: matchTitle });
-                        }
-                    } catch {}
-                }
-            } else {
-                // We already know the id; set a selectedMatch for convenience (preview only)
-                matchTitle = titleForSearch(item) || '';
-                setSelectedMatch({ kind: isMovie ? 'movie' : 'tv', tmdbId, title: matchTitle });
-            }
+      if (!tmdbId) {
+        setMediaData(null);
+        return;
+      }
 
-            if (!tmdbId) {
-                setMediaData(null);
-                return;
-            }
+      setMediaLoading(true);
+      try {
+        const data = await callFunction('tmdbMedia', { kind: isMovie ? 'movie' : 'tv', tmdbId });
+        setMediaData(data as any);
+      } finally {
+        setMediaLoading(false);
+      }
+    }
 
-            setMediaLoading(true);
-            try {
-                const data = await callFunction('tmdbMedia', { kind: isMovie ? 'movie' : 'tv', tmdbId });
-                setMediaData(data as any);
-            } finally {
-                setMediaLoading(false);
-            }
-        }
-
-        preload();
-
-    }, [open, item]);
+    preload();
+  }, [open, item]);
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -173,11 +173,7 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
   const handleSelectMatch = (result: SearchResult) => {
     if (!item) return;
     const kind = isMovie ? 'movie' : 'tv';
-    setSelectedMatch({
-      kind,
-      tmdbId: result.id,
-      title: result.title,
-    });
+    setSelectedMatch({ kind, tmdbId: result.id, title: result.title });
     fetchMediaData(kind, result.id);
   };
 
@@ -190,15 +186,16 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
         docId: item.id,
         kind: selectedMatch.kind,
         tmdbId: selectedMatch.tmdbId,
-        updateDisplayTitle,
+        updateDisplayTitle, // ✅ correctly referenced
         includeCast: true,
       });
 
       toast({ title: "Match Updated", description: `Successfully matched with "${selectedMatch.title}".` });
-      
+
+      // ✅ Optimistic patch uses displayTitle so we never overwrite raw title/showTitle
       const patch: Partial<any> = {};
-       if (updateDisplayedTitle) {
-        patch[isMovie ? 'title' : 'showTitle'] = selectedMatch.title;
+      if (updateDisplayTitle) {
+        patch.displayTitle = selectedMatch.title;
       }
       onApplied?.(item.id, patch);
 
@@ -217,33 +214,32 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
     setArtworkSaving({ type, url });
 
     const payload: { collection: string; docId: string; posterUrl?: string; backdropUrl?: string; videoLink?: string } = {
-        collection: item.collectionPath,
-        docId: item.id,
+      collection: item.collectionPath,
+      docId: item.id,
     };
     const patch: Partial<any> = {};
 
     if (type === 'poster') {
-        payload.posterUrl = url;
-        patch.posterUrl = url;
+      payload.posterUrl = url;
+      patch.posterUrl = url;
     } else if (type === 'backdrop') {
-        payload.backdropUrl = url;
-        patch.backdropUrl = url;
+      payload.backdropUrl = url;
+      patch.backdropUrl = url;
     } else if (type === 'video') {
-        payload.videoLink = url;
-        patch.videoLink = url;
+      payload.videoLink = url;
+      patch.videoLink = url;
     }
 
     try {
-        await callFunction('tmdbManualSet', payload);
-        toast({ title: "Artwork Updated", description: `The ${type} has been set.` });
-        onApplied?.(item.id, patch);
+      await callFunction('tmdbManualSet', payload);
+      toast({ title: "Artwork Updated", description: `The ${type} has been set.` });
+      onApplied?.(item.id, patch);
     } catch (err: any) {
-        toast({ title: "Save Failed", description: err.message, variant: 'destructive' });
+      toast({ title: "Save Failed", description: err.message, variant: 'destructive' });
     } finally {
-        setArtworkSaving(null);
+      setArtworkSaving(null);
     }
   };
-
 
   if (!item) return null;
 
@@ -253,142 +249,169 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
         <DialogHeader>
           <DialogTitle>Edit Media</DialogTitle>
           <DialogDescription>
-            Fix incorrect matches or manually set artwork for "{displayTitle}".
+            Fix incorrect matches or manually set artwork for "{displayTitleText}".
           </DialogDescription>
         </DialogHeader>
 
         <div className="grid md:grid-cols-2 gap-6 pt-4">
-            {/* Left Column: Matching */}
-            <div className="flex flex-col gap-4">
-                <div className="flex gap-4">
-                    <div className="w-24 flex-shrink-0">
-                        <Image 
-                            src={item.current.posterUrl || `https://picsum.photos/seed/${item.id}/100/150`}
-                            alt={displayTitle}
-                            width={100}
-                            height={150}
-                            className="rounded-md object-cover aspect-[2/3] bg-muted"
-                        />
-                    </div>
-                    <div className="space-y-1">
-                        <p className="text-sm text-muted-foreground">Current Title</p>
-                        <p className="font-semibold text-lg">{displayTitle}</p>
-                    </div>
-                </div>
+          {/* Left Column: Matching */}
+          <div className="flex flex-col gap-4">
+            <div className="flex gap-4">
+              <div className="w-24 flex-shrink-0">
+                <Image
+                  src={item.current.posterUrl || `https://picsum.photos/seed/${item.id}/100/150`}
+                  alt={displayTitleText}
+                  width={100}
+                  height={150}
+                  className="rounded-md object-cover aspect-[2/3] bg-muted"
+                />
+              </div>
+              <div className="space-y-1">
+                <p className="text-sm text-muted-foreground">Current Title</p>
+                <p className="font-semibold text-lg">{displayTitleText}</p>
+              </div>
+            </div>
 
-                <form onSubmit={handleSearch} className="flex gap-2">
-                    <Input 
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        placeholder={isMovie ? "Search movie title..." : "Search show title..."}
-                        disabled={isSearching || isFixing}
-                    />
-                    <Button type="submit" disabled={isSearching || isFixing || !searchQuery}>
-                        {isSearching ? <Loader2 className="animate-spin" /> : <Search />}
-                    </Button>
-                </form>
+            <form onSubmit={handleSearch} className="flex gap-2">
+              <Input
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder={isMovie ? "Search movie title..." : "Search show title..."}
+                disabled={isSearching || isFixing}
+              />
+              <Button type="submit" disabled={isSearching || isFixing || !searchQuery}>
+                {isSearching ? <Loader2 className="animate-spin" /> : <Search />}
+              </Button>
+            </form>
 
-                <ScrollArea className="h-64 rounded-md border">
-                    <div className="p-2 space-y-1">
-                        {searchResults.map(result => (
-                            <div 
-                                key={result.id}
-                                onClick={() => handleSelectMatch(result)}
-                                className={cn('flex items-center gap-3 p-2 rounded-md cursor-pointer transition-colors', selectedMatch?.tmdbId === result.id ? 'bg-accent text-accent-foreground' : 'hover:bg-muted')}
-                            >
-                                {result.posterUrl ?
-                                    <Image src={result.posterUrl} alt={result.title} width={40} height={60} className="rounded-sm bg-muted object-cover aspect-[2/3]" />
-                                    : <div className="w-[40px] h-[60px] rounded-sm bg-muted flex items-center justify-center text-xs text-muted-foreground">No Art</div>
-                                }
-                                <div className="flex-1">
-                                    <p className="font-semibold text-sm">{result.title}</p>
-                                    <p className="text-xs text-muted-foreground">{result.year}</p>
+            <ScrollArea className="h-64 rounded-md border">
+              <div className="p-2 space-y-1">
+                {searchResults.map(result => (
+                  <div
+                    key={result.id}
+                    onClick={() => handleSelectMatch(result)}
+                    className={cn(
+                      'flex items-center gap-3 p-2 rounded-md cursor-pointer transition-colors',
+                      selectedMatch?.tmdbId === result.id ? 'bg-accent text-accent-foreground' : 'hover:bg-muted'
+                    )}
+                  >
+                    {result.posterUrl ? (
+                      <Image src={result.posterUrl} alt={result.title} width={40} height={60} className="rounded-sm bg-muted object-cover aspect-[2/3]" />
+                    ) : (
+                      <div className="w-[40px] h-[60px] rounded-sm bg-muted flex items-center justify-center text-xs text-muted-foreground">No Art</div>
+                    )}
+                    <div className="flex-1">
+                      <p className="font-semibold text-sm">{result.title}</p>
+                      <p className="text-xs text-muted-foreground">{result.year}</p>
+                    </div>
+                  </div>
+                ))}
+                {!isSearching && searchResults.length === 0 && <p className="text-center text-sm text-muted-foreground py-4">No search results.</p>}
+                {isSearching && <div className="flex justify-center py-4"><Loader2 className="animate-spin text-muted-foreground" /></div>}
+              </div>
+            </ScrollArea>
+
+            <div className="flex items-center space-x-2">
+              <Checkbox
+                id="updateTitle"
+                checked={updateDisplayTitle}
+                onCheckedChange={(checked) => setUpdateDisplayTitle(!!checked)}
+                disabled={!selectedMatch}
+              />
+              <Label htmlFor="updateTitle" className="text-sm font-normal">
+                Update displayed title to "{selectedMatch?.title || '...'}"
+              </Label>
+            </div>
+
+            <Button onClick={handleConfirmFix} disabled={!selectedMatch || isFixing}>
+              {isFixing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Confirm Fix
+            </Button>
+          </div>
+
+          {/* Right Column: Artwork Galleries */}
+          <div className="space-y-4">
+            <Tabs defaultValue="posters" className="w-full">
+              <TabsList>
+                <TabsTrigger value="posters"><ImageIcon className="mr-2" /> Posters</TabsTrigger>
+                <TabsTrigger value="backdrops"><Images className="mr-2" /> Backdrops</TabsTrigger>
+                <TabsTrigger value="trailers"><Video className="mr-2" /> Trailers</TabsTrigger>
+              </TabsList>
+              <div className="pt-4 min-h-[360px]">
+                {mediaLoading && <div className="flex items-center justify-center h-full"><Loader2 className="animate-spin text-muted-foreground" /></div>}
+                {!mediaLoading && mediaData && (
+                  <>
+                    <TabsContent value="posters">
+                      <ScrollArea className="h-[360px]">
+                        <div className="grid grid-cols-4 gap-2 pr-4">
+                          {mediaData.posters.map(p => (
+                            <button key={p.url} onClick={() => handleManualSet('poster', p.url)} className="relative aspect-[2/3] rounded-md overflow-hidden group">
+                              <Image src={p.url} alt="Poster" fill className="object-cover" />
+                              {artworkSaving?.type === 'poster' && artworkSaving.url === p.url && (
+                                <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
+                                  <Loader2 className="animate-spin text-white" />
                                 </div>
-                            </div>
-                        ))}
-                        {!isSearching && searchResults.length === 0 && <p className="text-center text-sm text-muted-foreground py-4">No search results.</p>}
-                        {isSearching && <div className="flex justify-center py-4"><Loader2 className="animate-spin text-muted-foreground" /></div>}
-                    </div>
-                </ScrollArea>
-                
-                <div className="flex items-center space-x-2">
-                    <Checkbox id="updateTitle" checked={updateDisplayedTitle} onCheckedChange={(checked) => setUpdateDisplayedTitle(!!checked)} disabled={!selectedMatch} />
-                    <Label htmlFor="updateTitle" className="text-sm font-normal">Update displayed title to "{selectedMatch?.title || '...'}"</Label>
-                </div>
-
-                <Button onClick={handleConfirmFix} disabled={!selectedMatch || isFixing}>
-                  {isFixing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                  Confirm Fix
-                </Button>
-            </div>
-
-            {/* Right Column: Artwork Galleries */}
-            <div className="space-y-4">
-              <Tabs defaultValue="posters" className="w-full">
-                <TabsList>
-                  <TabsTrigger value="posters"><ImageIcon className="mr-2"/> Posters</TabsTrigger>
-                  <TabsTrigger value="backdrops"><Images className="mr-2"/> Backdrops</TabsTrigger>
-                  <TabsTrigger value="trailers"><Video className="mr-2"/> Trailers</TabsTrigger>
-                </TabsList>
-                <div className="pt-4 min-h-[360px]">
-                  {mediaLoading && <div className="flex items-center justify-center h-full"><Loader2 className="animate-spin text-muted-foreground" /></div>}
-                  {!mediaLoading && mediaData && (
-                    <>
-                      <TabsContent value="posters">
-                        <ScrollArea className="h-[360px]">
-                          <div className="grid grid-cols-4 gap-2 pr-4">
-                            {mediaData.posters.map(p => (
-                              <button key={p.url} onClick={() => handleManualSet('poster', p.url)} className="relative aspect-[2/3] rounded-md overflow-hidden group">
-                                <Image src={p.url} alt="Poster" fill className="object-cover" />
-                                {artworkSaving?.type === 'poster' && artworkSaving.url === p.url && <div className="absolute inset-0 bg-black/50 flex items-center justify-center"><Loader2 className="animate-spin text-white"/></div>}
-                              </button>
-                            ))}
-                          </div>
-                        </ScrollArea>
-                      </TabsContent>
-                      <TabsContent value="backdrops">
-                        <ScrollArea className="h-[360px]">
-                          <div className="grid grid-cols-2 gap-2 pr-4">
-                            {mediaData.backdrops.map(b => (
-                              <button key={b.url} onClick={() => handleManualSet('backdrop', b.url)} className="relative aspect-video rounded-md overflow-hidden group">
-                                <Image src={b.url} alt="Backdrop" fill className="object-cover" />
-                                {artworkSaving?.type === 'backdrop' && artworkSaving.url === b.url && <div className="absolute inset-0 bg-black/50 flex items-center justify-center"><Loader2 className="animate-spin text-white"/></div>}
-                              </button>
-                            ))}
-                          </div>
-                        </ScrollArea>
-                      </TabsContent>
-                      <TabsContent value="trailers">
-                         <ScrollArea className="h-[360px]">
-                            <div className="space-y-2 pr-4">
-                              {mediaData.videos.map(v => (
-                                <button key={v.key} onClick={() => handleManualSet('video', v.key)} className="w-full flex items-center gap-3 p-2 rounded-md hover:bg-muted group">
-                                  <div className="w-24 aspect-video relative rounded-md overflow-hidden shrink-0">
-                                    <Image src={v.thumbnailUrl} alt={v.name} fill className="object-cover"/>
-                                     {artworkSaving?.type === 'video' && `https://www.youtube.com/watch?v=${v.key}` === artworkSaving.url && <div className="absolute inset-0 bg-black/50 flex items-center justify-center"><Loader2 className="animate-spin text-white"/></div>}
+                              )}
+                            </button>
+                          ))}
+                        </div>
+                      </ScrollArea>
+                    </TabsContent>
+                    <TabsContent value="backdrops">
+                      <ScrollArea className="h-[360px]">
+                        <div className="grid grid-cols-2 gap-2 pr-4">
+                          {mediaData.backdrops.map(b => (
+                            <button key={b.url} onClick={() => handleManualSet('backdrop', b.url)} className="relative aspect-video rounded-md overflow-hidden group">
+                              <Image src={b.url} alt="Backdrop" fill className="object-cover" />
+                              {artworkSaving?.type === 'backdrop' && artworkSaving.url === b.url && (
+                                <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
+                                  <Loader2 className="animate-spin text-white" />
+                                </div>
+                              )}
+                            </button>
+                          ))}
+                        </div>
+                      </ScrollArea>
+                    </TabsContent>
+                    <TabsContent value="trailers">
+                      <ScrollArea className="h-[360px]">
+                        <div className="space-y-2 pr-4">
+                          {mediaData.videos.map(v => (
+                            <button key={v.key} onClick={() => handleManualSet('video', v.key)} className="w-full flex items-center gap-3 p-2 rounded-md hover:bg-muted group">
+                              <div className="w-24 aspect-video relative rounded-md overflow-hidden shrink-0">
+                                <Image src={v.thumbnailUrl} alt={v.name} fill className="object-cover" />
+                                {artworkSaving?.type === 'video' && `https://www.youtube.com/watch?v=${v.key}` === artworkSaving.url && (
+                                  <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
+                                    <Loader2 className="animate-spin text-white" />
                                   </div>
-                                  <div className="text-left">
-                                      <p className="text-sm font-medium">{v.name}</p>
-                                      <p className="text-xs text-muted-foreground">{v.type}</p>
-                                  </div>
-                                </button>
-                              ))}
-                            </div>
-                         </ScrollArea>
-                      </TabsContent>
-                    </>
-                  )}
-                   {!mediaLoading && !mediaData && <div className="flex flex-col items-center justify-center h-full text-muted-foreground text-center"><ImageIcon/><p className="mt-2 text-sm">Select a match to see media</p></div>}
-                </div>
-              </Tabs>
-            </div>
+                                )}
+                              </div>
+                              <div className="text-left">
+                                <p className="text-sm font-medium">{v.name}</p>
+                                <p className="text-xs text-muted-foreground">{v.type}</p>
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                      </ScrollArea>
+                    </TabsContent>
+                  </>
+                )}
+                {!mediaLoading && !mediaData && (
+                  <div className="flex flex-col items-center justify-center h-full text-muted-foreground text-center">
+                    <ImageIcon />
+                    <p className="mt-2 text-sm">Select a match to see media</p>
+                  </div>
+                )}
+              </div>
+            </Tabs>
+          </div>
         </div>
+
         <DialogFooter className="pt-6">
-            <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
   );
 }
-
-    

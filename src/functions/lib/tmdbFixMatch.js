@@ -44,7 +44,7 @@ const tmdbClient_1 = require("./tmdbClient");
 const corsHandler = (0, cors_1.default)({ origin: true });
 // Helper to check if a value is present (not null, undefined, or empty string)
 const isPresent = (val) => val !== undefined && val !== null && val !== '';
-async function handleMovieFix(docRef, tmdbId, includeCast) {
+async function handleMovieFix(docRef, tmdbId, includeCast, updateDisplayTitle) {
     const docSnap = await docRef.get();
     if (!docSnap.exists) {
         throw new functions.https.HttpsError('not-found', 'Document not found.');
@@ -58,7 +58,6 @@ async function handleMovieFix(docRef, tmdbId, includeCast) {
     const updatedFields = [];
     const fieldMap = {
         tmdbId: () => details.id,
-        title: () => details.title,
         posterUrl: () => !data.posterLocked ? (0, tmdbClient_1.posterUrl)(details.poster_path, 'w500') : undefined,
         backdropUrl: () => !data.backdropLocked ? (0, tmdbClient_1.backdropUrl)(details.backdrop_path, 'original') : undefined,
         overview: () => details.overview,
@@ -72,6 +71,11 @@ async function handleMovieFix(docRef, tmdbId, includeCast) {
             profileUrl: (0, tmdbClient_1.posterUrl)(c.profile_path, 'w185'),
         })) : undefined,
     };
+    // Always update the title if the flag is set
+    if (updateDisplayTitle && details.title) {
+        updatePayload.title = details.title;
+        updatedFields.push('title');
+    }
     for (const [key, valueFn] of Object.entries(fieldMap)) {
         if (!isPresent(data[key])) {
             const value = valueFn();
@@ -86,7 +90,7 @@ async function handleMovieFix(docRef, tmdbId, includeCast) {
     }
     return { ok: true, docId: docRef.id, kind: 'movie', tmdbId, updated: updatedFields };
 }
-async function handleTVEpisodeFix(docRef, tmdbShowId, includeCast) {
+async function handleTVEpisodeFix(docRef, tmdbShowId, includeCast, updateDisplayTitle) {
     const docSnap = await docRef.get();
     if (!docSnap.exists) {
         throw new functions.https.HttpsError('not-found', 'Episode document not found.');
@@ -106,10 +110,14 @@ async function handleTVEpisodeFix(docRef, tmdbShowId, includeCast) {
     const showUpdatedFields = [];
     const showDoc = await showRef.get();
     const showData = showDoc.exists ? showDoc.data() : {};
+    // Always update show title if the flag is set (or if it's new)
+    if ((updateDisplayTitle || !isPresent(showData.title)) && showDetails.name) {
+        showUpdatePayload.title = showDetails.name;
+        showUpdatedFields.push('title');
+    }
     const showFieldMap = {
-        title: () => showDetails.name,
-        posterUrl: () => (0, tmdbClient_1.posterUrl)(showDetails.poster_path, 'w500'),
-        backdropUrl: () => (0, tmdbClient_1.backdropUrl)(showDetails.backdrop_path, 'original'),
+        posterUrl: () => !showData.posterLocked ? (0, tmdbClient_1.posterUrl)(showDetails.poster_path, 'w500') : undefined,
+        backdropUrl: () => !showData.backdropLocked ? (0, tmdbClient_1.backdropUrl)(showDetails.backdrop_path, 'original') : undefined,
         overview: () => showDetails.overview,
         genres: () => (showDetails.genres || []).map((g) => g.name),
         firstAirDate: () => showDetails.first_air_date,
@@ -135,11 +143,15 @@ async function handleTVEpisodeFix(docRef, tmdbShowId, includeCast) {
     const episodeUpdatePayload = {};
     const episodeUpdatedFields = [];
     const currentShowData = { ...showData, ...showUpdatePayload };
+    // Always update episode's showTitle if flag is set
+    if (updateDisplayTitle && currentShowData.title) {
+        episodeUpdatePayload.showTitle = currentShowData.title;
+        episodeUpdatedFields.push('showTitle');
+    }
     const episodeFieldMap = {
         showRef: () => showRef.path,
-        showTitle: () => currentShowData.title,
-        posterUrl: () => currentShowData.posterUrl,
-        backdropUrl: () => currentShowData.backdropUrl,
+        posterUrl: () => !data.posterLocked ? currentShowData.posterUrl : undefined,
+        backdropUrl: () => !data.backdropLocked ? currentShowData.backdropUrl : undefined,
         overview: () => currentShowData.overview, // Inherit show overview if episode has none
     };
     for (const [key, valueFn] of Object.entries(episodeFieldMap)) {
@@ -168,17 +180,17 @@ exports.default = functions.https.onRequest((req, res) => {
             if (!authHeader || !authHeader.startsWith('Bearer ')) {
                 throw new functions.https.HttpsError('unauthenticated', 'User must be authenticated.');
             }
-            const { collection, docId, kind, tmdbId, includeCast = true } = req.body;
+            const { collection, docId, kind, tmdbId, includeCast = true, updateDisplayTitle = false } = req.body;
             if (!collection || !docId || !kind || !tmdbId) {
                 throw new functions.https.HttpsError('invalid-argument', 'Missing required fields: collection, docId, kind, tmdbId.');
             }
             const docRef = initFirebase_1.db.doc(`${collection}/${docId}`);
             let result;
             if (kind === 'movie') {
-                result = await handleMovieFix(docRef, tmdbId, includeCast);
+                result = await handleMovieFix(docRef, tmdbId, includeCast, updateDisplayTitle);
             }
             else if (kind === 'tv') {
-                result = await handleTVEpisodeFix(docRef, tmdbId, includeCast);
+                result = await handleTVEpisodeFix(docRef, tmdbId, includeCast, updateDisplayTitle);
             }
             else {
                 throw new functions.https.HttpsError('invalid-argument', 'Invalid "kind" specified. Must be "movie" or "tv".');
