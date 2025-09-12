@@ -1,3 +1,4 @@
+
 "use client";
 
 import * as React from "react";
@@ -16,18 +17,18 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 
 export interface MediaEditModalItem {
-  id: string; // Firestore doc ID
-  collectionPath: string; // e.g., "users/<uid>/media"
-  kind: 'movie' | 'episode';
+  id: string; // Firestore doc ID (can be movie ID or tmdbShowId)
+  collectionPath: string; // e.g., "users/<uid>/media" or "users/<uid>/shows"
+  kind: 'movie' | 'episode' | 'show';
   current: {
     title?: string;
+    displayTitle?: string;
     tmdbId?: number;
-    showRef?: string; // For episodes, path like 'users/uid/shows/showid'
     posterUrl?: string | null;
     backdropUrl?: string | null;
     videoLink?: string | null;
-    showTitle?: string;
-    displayTitle?: string | null;
+    showTitle?: string; // Legacy for episodes before shows collection
+    showRef?: string; // Legacy for episodes before shows collection
   };
 }
 
@@ -53,13 +54,13 @@ type TmdbMediaData = {
 
 function tmdbIdFromShowRef(ref?: string | null): number | null {
   if (!ref) return null;
-  const m = ref.match(/\/shows\/(\d+)/);
+  const m = ref.match(/(?:^|\/)shows\/(\d+)/);
   return m ? Number(m[1]) : null;
 }
 
 function titleForSearch(item: MediaEditModalItem | null): string | null {
   if (!item) return null;
-  return item.current?.displayTitle || item.current?.showTitle || item.current?.title || null;
+  return item.current?.displayTitle || item.current?.title || item.current?.showTitle || null;
 }
 
 export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModalProps) {
@@ -70,7 +71,6 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
   const [searchResults, setSearchResults] = React.useState<SearchResult[]>([]);
   const [isSearching, setIsSearching] = React.useState(false);
 
-  // ✅ unified & correctly named state
   const [updateDisplayTitle, setUpdateDisplayTitle] = React.useState(true);
 
   const [isFixing, setIsFixing] = React.useState(false);
@@ -79,15 +79,17 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
   const [mediaLoading, setMediaLoading] = React.useState(false);
   const [artworkSaving, setArtworkSaving] = React.useState<{ type: 'poster'|'backdrop'|'video', url: string } | null>(null);
 
-  const displayTitleText = item?.current.displayTitle || item?.current.showTitle || item?.current.title || "Unknown Media";
+  const displayTitleText = item?.current.displayTitle || item?.current.title || item?.current.showTitle || "Unknown Media";
   const isMovie = item?.kind === 'movie';
+  const isShowOrEpisode = item?.kind === 'show' || item?.kind === 'episode';
 
   const fetchMediaData = React.useCallback(async (kind: 'movie' | 'tv', tmdbId: number) => {
     if (!user) return;
     setMediaLoading(true);
     setMediaData(null);
     try {
-      const data = await callFunction<TmdbMediaData>('tmdbMedia', { kind, tmdbId });
+      const idToken = await user.getIdToken();
+      const data = await callFunction<TmdbMediaData>('tmdbMedia', { kind, tmdbId }, idToken);
       setMediaData(data);
     } catch (error: any) {
       toast({ title: "Failed to fetch media assets", description: error.message, variant: "destructive" });
@@ -104,15 +106,21 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
       setMediaData(null);
       return;
     }
-
-    const isMovie = item.kind === 'movie';
+    
+    const apiKind = isMovie ? 'movie' : 'tv';
 
     async function preload() {
+      if (!user) return;
       setSearchQuery(titleForSearch(item) || "");
 
-      const existingMovieId = isMovie ? item.current?.tmdbId : null;
-      const existingShowId = !isMovie ? tmdbIdFromShowRef(item.current?.showRef) : null;
-      let tmdbId: number | null = existingMovieId ?? existingShowId ?? null;
+      const idToken = await user.getIdToken();
+      let tmdbId: number | null = item.current?.tmdbId ?? null;
+      
+      // Legacy path for episodes before the `shows` collection existed
+      if (!tmdbId && item.kind === 'episode') {
+        tmdbId = tmdbIdFromShowRef(item.current?.showRef);
+      }
+      
       let matchTitle: string | null = null;
 
       // If we don't already have an id, do a soft search to find one for preview
@@ -120,11 +128,11 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
         const q = titleForSearch(item);
         if (q) {
           try {
-            const results = await callFunction<any[]>('tmdbSearch', { q, kind: isMovie ? 'movie' : 'tv' });
+            const results = await callFunction<any[]>('tmdbSearch', { q, kind: apiKind }, idToken);
             if (Array.isArray(results) && results.length > 0) {
               tmdbId = results[0].id;
               matchTitle = results[0].title ?? q;
-              setSelectedMatch({ kind: isMovie ? 'movie' : 'tv', tmdbId, title: matchTitle });
+              setSelectedMatch({ kind: apiKind, tmdbId, title: matchTitle });
             }
           } catch {
             // ignore
@@ -133,7 +141,7 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
       } else {
         // We already know the id; set a selectedMatch for convenience (preview only)
         matchTitle = titleForSearch(item) || '';
-        setSelectedMatch({ kind: isMovie ? 'movie' : 'tv', tmdbId, title: matchTitle });
+        setSelectedMatch({ kind: apiKind, tmdbId, title: matchTitle });
       }
 
       if (!tmdbId) {
@@ -143,7 +151,7 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
 
       setMediaLoading(true);
       try {
-        const data = await callFunction('tmdbMedia', { kind: isMovie ? 'movie' : 'tv', tmdbId });
+        const data = await callFunction('tmdbMedia', { kind: apiKind, tmdbId }, idToken);
         setMediaData(data as any);
       } finally {
         setMediaLoading(false);
@@ -151,7 +159,7 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
     }
 
     preload();
-  }, [open, item]);
+  }, [open, item, user, isMovie]);
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -160,8 +168,9 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
     setSelectedMatch(null);
     setSearchResults([]);
     try {
-      const kind = isMovie ? 'movie' : 'tv';
-      const results = await callFunction<SearchResult[]>('tmdbSearch', { q: searchQuery, kind });
+      const apiKind = isMovie ? 'movie' : 'tv';
+      const idToken = await user.getIdToken();
+      const results = await callFunction<SearchResult[]>('tmdbSearch', { q: searchQuery, kind: apiKind }, idToken);
       setSearchResults(results || []);
     } catch (err: any) {
       toast({ title: "Search failed", description: err.message, variant: 'destructive' });
@@ -172,30 +181,34 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
 
   const handleSelectMatch = (result: SearchResult) => {
     if (!item) return;
-    const kind = isMovie ? 'movie' : 'tv';
-    setSelectedMatch({ kind, tmdbId: result.id, title: result.title });
-    fetchMediaData(kind, result.id);
+    const apiKind = isMovie ? 'movie' : 'tv';
+    setSelectedMatch({ kind: apiKind, tmdbId: result.id, title: result.title });
+    fetchMediaData(apiKind, result.id);
   };
 
   const handleConfirmFix = async () => {
     if (!selectedMatch || !item || !user) return;
     setIsFixing(true);
     try {
-      await callFunction('tmdbFixMatch', {
+      const idToken = await user.getIdToken();
+      
+      const payload: any = {
         collection: item.collectionPath,
         docId: item.id,
-        kind: selectedMatch.kind,
+        kind: isMovie ? 'movie' : 'tv', // 'show' maps to 'tv' on the backend
         tmdbId: selectedMatch.tmdbId,
-        updateDisplayTitle, // ✅ correctly referenced
+        updateDisplayTitle,
         includeCast: true,
-      });
+      }
+      
+      await callFunction('tmdbFixMatch', payload, idToken);
 
       toast({ title: "Match Updated", description: `Successfully matched with "${selectedMatch.title}".` });
 
-      // ✅ Optimistic patch uses displayTitle so we never overwrite raw title/showTitle
       const patch: Partial<any> = {};
       if (updateDisplayTitle) {
         patch.displayTitle = selectedMatch.title;
+        patch.title = selectedMatch.title; // Also update raw title for shows collection
       }
       onApplied?.(item.id, patch);
 
@@ -231,7 +244,8 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
     }
 
     try {
-      await callFunction('tmdbManualSet', payload);
+      const idToken = await user.getIdToken();
+      await callFunction('tmdbManualSet', payload, idToken);
       toast({ title: "Artwork Updated", description: `The ${type} has been set.` });
       onApplied?.(item.id, patch);
     } catch (err: any) {

@@ -1,122 +1,207 @@
-import * as functions from 'firebase-functions';
-import * as admin from 'firebase-admin';
-import cors from 'cors';
-import { db } from './initFirebase';
-import { getShowFromCacheOrTMDB } from './showCache';
-import type { MediaDoc, ShowDoc } from './types';
+import * as functions from "firebase-functions";
+import cors from "cors";
+import * as admin from "firebase-admin";
+import { db } from "./initFirebase";
+import { getShowFromCache, CachedShow } from "./showCache";
 
 const corsHandler = cors({ origin: true });
 
-export default functions.https.onRequest((req, res) => {
-  corsHandler(req, res, async () => {
-    if (req.method !== 'POST') {
-      res.status(405).json({ error: 'Method Not Allowed' });
-      return;
-    }
+type ShowDoc = {
+  tmdbShowId: number; // same as numeric ID parsed from showRef
+  title: string;
+  displayTitle?: string | null;
+  overview?: string;
+  genres?: string[];
+  posterUrl?: string | null;
+  backdropUrl?: string | null;
+  posterLocked?: boolean;
+  backdropLocked?: boolean;
+  videoLink?: string | null;
+  episodeCount: number;
+  lastAddedAt?: FirebaseFirestore.Timestamp;
+  updatedAt: FirebaseFirestore.Timestamp;
+};
 
-    try {
-      const authHeader = req.headers.authorization;
-      if (!authHeader || !authHeader.startsWith('Bearer ')) {
-        throw new functions.https.HttpsError('unauthenticated', 'User must be authenticated.');
-      }
-      
-      const { uid, batchSize = 50, startAfterShowId } = req.body;
-      if (!uid) {
-        throw new functions.https.HttpsError('invalid-argument', 'Missing required field: uid.');
-      }
+function toTimestamp(v: any): FirebaseFirestore.Timestamp | undefined {
+  if (!v) return undefined;
+  if (v.toDate && v.toMillis) return v as FirebaseFirestore.Timestamp;
+  const d = new Date(v);
+  return isNaN(d.getTime()) ? undefined : admin.firestore.Timestamp.fromDate(d);
+}
 
-      let query = db.collection(`users/${uid}/media`)
-        .where('type', '==', 'episode')
-        .where('tmdbShowId', '!=', null)
-        .orderBy('tmdbShowId', 'asc')
-        .orderBy('addedAt', 'desc')
-        .limit(batchSize * 5); // Fetch more episodes to ensure we get full shows
+// pull numeric id from showRef: "shows/4586" OR "/users/<uid>/shows/4586"
+function idFromShowRef(showRef?: unknown): number | null {
+  if (typeof showRef !== "string") return null;
+  // match "shows/12345" OR "/.../shows/12345"
+  const m = showRef.match(/(?:^|\/)shows\/(\d+)/);
+  return m ? Number(m[1]) : null;
+}
 
-      if (startAfterShowId) {
-        query = query.startAfter(startAfterShowId);
-      }
 
-      const snapshot = await query.get();
+// count episodes for a given show id using showRef equality
+async function countEpisodesForShow(
+  mediaCol: FirebaseFirestore.CollectionReference,
+  uid: string,
+  showId: number
+) {
+  const refA = `shows/${showId}`;
+  const refB = `/users/${uid}/shows/${showId}`;
 
-      if (snapshot.empty) {
-        res.status(200).json({ processed: 0, created: 0, updated: 0, message: "No more episodes to process." });
-        return;
-      }
-      
-      const episodesByShow: Map<number, MediaDoc[]> = new Map();
-      snapshot.docs.forEach(doc => {
-        const episode = doc.data() as MediaDoc;
-        if (episode.tmdbShowId) {
-          if (!episodesByShow.has(episode.tmdbShowId)) {
-            episodesByShow.set(episode.tmdbShowId, []);
-          }
-          episodesByShow.get(episode.tmdbShowId)!.push(episode);
-        }
-      });
-      
-      let created = 0;
-      let updated = 0;
-      let lastProcessedShowId: number | undefined;
+  const byRefA = await mediaCol
+    .where("type", "==", "episode")
+    .where("showRef", "==", refA)
+    .get();
 
-      const showIdsToProcess = Array.from(episodesByShow.keys()).slice(0, batchSize);
+  const byRefB = await mediaCol
+    .where("type", "==", "episode")
+    .where("showRef", "==", refB)
+    .get();
 
-      for (const showId of showIdsToProcess) {
-        lastProcessedShowId = showId;
-        const episodes = episodesByShow.get(showId)!;
-
-        const showCache = await getShowFromCacheOrTMDB(showId);
-        if (!showCache) continue;
-
-        const episodeCount = episodes.length;
-        const lastAddedAt = episodes.reduce((latest, ep) => {
-            const currentTs = ep.addedAt || ep.updatedAt;
-            if (!latest || (currentTs && currentTs > latest)) return currentTs;
-            return latest;
-        }, null as admin.firestore.Timestamp | null);
-
-        const showRef = db.collection(`users/${uid}/shows`).doc(String(showId));
-        const showSnap = await showRef.get();
-
-        const dataToUpsert: Partial<ShowDoc> = {
-            tmdbShowId: showId,
-            title: showCache.title,
-            overview: showCache.overview,
-            genres: showCache.genres,
-            posterUrl: showCache.posterUrl,
-            backdropUrl: showCache.backdropUrl,
-            episodeCount,
-            lastAddedAt: lastAddedAt || admin.firestore.FieldValue.serverTimestamp(),
-            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        };
-        
-        // Do not touch locked fields or displayTitle if they exist
-        const existingData = showSnap.exists ? showSnap.data() as ShowDoc : {};
-        if (existingData.posterLocked === true) delete dataToUpsert.posterUrl;
-        if (existingData.backdropLocked === true) delete dataToUpsert.backdropUrl;
-        if (existingData.displayTitle) delete dataToUpsert.title;
-
-        await showRef.set(dataToUpsert, { merge: true });
-
-        if (showSnap.exists) {
-          updated++;
-        } else {
-          created++;
-        }
-      }
-
-      res.status(200).json({
-        processed: showIdsToProcess.length,
-        created,
-        updated,
-        nextStartAfterShowId: lastProcessedShowId,
-      });
-
-    } catch (error: any) {
-      functions.logger.error("Error in materializeUserShows:", error);
-      const code = error.code || 'internal';
-      const message = error.message || 'An internal error occurred.';
-      res.status(code === 'unauthenticated' ? 401 : code === 'invalid-argument' ? 400 : 500)
-         .json({ error: { code, message } });
+  // merge unique docs
+  const seen = new Set<string>();
+  const all: FirebaseFirestore.QueryDocumentSnapshot[] = [];
+  byRefA.forEach((d) => {
+    if (!seen.has(d.id)) {
+      seen.add(d.id);
+      all.push(d);
     }
   });
-});
+  byRefB.forEach((d) => {
+    if (!seen.has(d.id)) {
+      seen.add(d.id);
+      all.push(d);
+    }
+  });
+
+  let lastAddedAt: FirebaseFirestore.Timestamp | undefined;
+  all.forEach((doc) => {
+    const added = toTimestamp(doc.get("addedAt"));
+    const updatedTs = toTimestamp(doc.get("updatedAt"));
+    const candidate = added ?? updatedTs;
+    if (candidate) {
+      if (!lastAddedAt || candidate.toMillis() > lastAddedAt.toMillis()) {
+        lastAddedAt = candidate;
+      }
+    }
+  });
+
+  return { episodeCount: all.length, lastAddedAt };
+}
+
+/**
+ * POST body: { uid: string, batchSize?: number, startAfterShowId?: number }
+ * Returns: { processed:number, created:number, updated:number, nextStartAfterShowId?:number }
+ */
+const handler = async (req: functions.https.Request, res: functions.Response) => {
+  corsHandler(req, res, async () => {
+    try {
+      if (req.method !== "POST") {
+        res.status(405).json({ error: "Method Not Allowed" });
+        return;
+      }
+
+      const { uid, batchSize = 50, startAfterShowId } = req.body || {};
+      if (!uid || typeof uid !== "string") {
+        res.status(400).json({ error: "Missing uid" });
+        return;
+      }
+
+      const mediaCol = db.collection(`users/${uid}/media`);
+
+      // pull a large window and extract distinct show ids from showRef
+      const windowSnap = await mediaCol
+        .where("type", "==", "episode")
+        .limit(2000)
+        .get();
+
+      const seen = new Set<number>();
+      let allIds: number[] = [];
+      windowSnap.forEach((doc) => {
+        const showId = idFromShowRef(doc.get("showRef"));
+        if (showId && !seen.has(showId)) {
+          seen.add(showId);
+          allIds.push(showId);
+        }
+      });
+
+      // sort + paginate by numeric id if requested
+      allIds.sort((a, b) => a - b);
+      if (typeof startAfterShowId === "number") {
+        allIds = allIds.filter((id) => id > startAfterShowId);
+      }
+
+      if (allIds.length === 0) {
+        functions.logger.warn(
+          "materializeUserShows: found 0 show ids via showRef",
+          { uid, windowCount: windowSnap.size }
+        );
+        res.json({ processed: 0, created: 0, updated: 0 });
+        return;
+      }
+
+      const batchIds = allIds.slice(0, batchSize);
+      const nextStartAfter =
+        allIds.length > batchIds.length ? batchIds[batchIds.length - 1] : undefined;
+
+      let created = 0;
+      let updated = 0;
+
+      for (const tmdbShowId of batchIds) {
+        // Count episodes + pick lastAddedAt
+        const { episodeCount, lastAddedAt } = await countEpisodesForShow(
+          mediaCol,
+          uid,
+          tmdbShowId
+        );
+
+        // Pull show metadata from global cache if present
+        const cache: CachedShow | null = await getShowFromCache(tmdbShowId);
+
+        const userShowRef = db.doc(`users/${uid}/shows/${tmdbShowId}`);
+        const existingSnap = await userShowRef.get();
+        const exists = existingSnap.exists;
+        const existingData = (exists
+          ? (existingSnap.data() as Partial<ShowDoc>)
+          : {}) || {};
+
+        // Base data (respect existing values)
+        const base: Partial<ShowDoc> = {
+          tmdbShowId,
+          title: cache?.title || existingData.title || "Untitled Show",
+          overview: cache?.overview ?? existingData.overview,
+          genres: cache?.genres ?? existingData.genres,
+          posterUrl: cache?.posterUrl ?? existingData.posterUrl ?? null,
+          backdropUrl: cache?.backdropUrl ?? existingData.backdropUrl ?? null,
+          episodeCount,
+        };
+
+        // Respect user overrides/locks
+        if (existingData.posterLocked) delete base.posterUrl;
+        if (existingData.backdropLocked) delete base.backdropUrl;
+        if (existingData.displayTitle) delete base.title;
+
+        const updates: FirebaseFirestore.UpdateData<ShowDoc> = {
+          ...base,
+          lastAddedAt:
+            (lastAddedAt as any) ?? admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        };
+
+        await userShowRef.set(updates, { merge: true });
+        exists ? updated++ : created++;
+      }
+
+      res.json({
+        processed: batchIds.length,
+        created,
+        updated,
+        nextStartAfterShowId: nextStartAfter,
+      });
+    } catch (err: any) {
+      functions.logger.error("materializeUserShows error", err);
+      res.status(500).json({ error: err?.message || "Internal error" });
+    }
+  });
+};
+
+export default functions.https.onRequest(handler);

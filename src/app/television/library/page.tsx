@@ -9,19 +9,32 @@ import type { MediaDoc } from "@/lib/db.types";
 import { useMemo, useRef, useState, useEffect } from "react";
 import Image from "next/image";
 import { useInfiniteFirestore } from "@/hooks/useInfiniteFirestore";
-import { groupEpisodesByShow, ShowListItem, EpisodeDoc } from "@/lib/groupEpisodesByShow";
-import { deriveShowName } from "@/lib/showKey";
 import { MediaEditButton } from "@/components/MediaEditButton";
 import { MediaEditModal, type MediaEditModalItem } from "@/components/MediaEditModal";
 
-function ShowCard({ item, onEdit }: { item: ShowListItem, onEdit: () => void; }) {
+// Represents a document from the /users/{uid}/shows collection
+type ShowDoc = {
+    id: string;
+    tmdbShowId: number;
+    title: string;
+    displayTitle?: string;
+    posterUrl?: string;
+    backdropUrl?: string;
+    videoLink?: string;
+    episodeCount?: number;
+    updatedAt: any; // Firestore Timestamp
+};
+
+function ShowCard({ item, onEdit }: { item: ShowDoc, onEdit: () => void; }) {
+    const displayTitle = item.displayTitle || item.title;
+
     return (
         <div role="button" aria-disabled="true" className="group block">
             <div className="flex flex-col gap-2">
                 <div className="relative aspect-[2/3] w-full overflow-hidden rounded-lg shadow-lg transition-all duration-300 group-hover:scale-105 group-hover:shadow-primary/40">
                     <Image
                         src={item.posterUrl || `https://picsum.photos/500/750?random=${item.id}`}
-                        alt={item.title}
+                        alt={displayTitle}
                         width={500}
                         height={750}
                         className="object-cover bg-muted"
@@ -31,10 +44,10 @@ function ShowCard({ item, onEdit }: { item: ShowListItem, onEdit: () => void; })
                 </div>
                 <div className="space-y-1">
                   <h3 className="font-headline text-base font-bold text-foreground truncate">
-                      {item.title}
+                      {displayTitle}
                   </h3>
                   <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                      <span>{item.episodeCount} {item.episodeCount === 1 ? 'episode' : 'episodes'}</span>
+                      <span>{item.episodeCount || 0} {item.episodeCount === 1 ? 'episode' : 'episodes'}</span>
                   </div>
                 </div>
             </div>
@@ -44,64 +57,48 @@ function ShowCard({ item, onEdit }: { item: ShowListItem, onEdit: () => void; })
 
 function TvLibrary() {
   const { user } = useAuthUser();
-  const { items: fetchedEpisodes, loading, hasMore, attachSentinel } = useInfiniteFirestore<MediaDoc & { id: string }>({
-      collectionPath: user ? `users/${user.uid}/media` : undefined,
-      where: [['type', '==', 'episode']],
-      orderBy: ['addedAt', 'desc'],
-      pageSize: 96,
-      map: (doc) => ({ id: doc.id, ...doc.data() } as MediaDoc & {id: string}),
+  const { items: fetchedShows, loading, hasMore, attachSentinel } = useInfiniteFirestore<ShowDoc>({
+      collectionPath: user ? `users/${user.uid}/shows` : undefined,
+      where: [['episodeCount', '>', 0]],
+      orderBy: ['updatedAt', 'desc'],
+      pageSize: 24,
+      map: (doc) => ({ id: doc.id, ...doc.data() } as ShowDoc),
   });
 
-  const [episodes, setEpisodes] = useState<Array<MediaDoc & {id: string}>>([]);
+  const [shows, setShows] = useState<ShowDoc[]>([]);
   useEffect(() => {
-    setEpisodes(fetchedEpisodes);
-  }, [fetchedEpisodes]);
+    setShows(fetchedShows);
+  }, [fetchedShows]);
 
   const [editingItem, setEditingItem] = useState<MediaEditModalItem | null>(null);
 
-  const shows = useMemo(() => {
-    const grouped = groupEpisodesByShow(episodes as EpisodeDoc[]);
-    
-    if (process.env.NODE_ENV === 'development' && episodes.length > 0) {
-        console.table(episodes.slice(0, 10).map(ep => ({
-            filename: ep.filename,
-            path: ep.path,
-            derived: deriveShowName(ep as any)
-        })));
-    }
-
-    return grouped;
-  }, [episodes]);
-  
-  const handleEdit = (item: ShowListItem) => {
+  const handleEdit = (show: ShowDoc) => {
     if (!user) return;
     setEditingItem({
-        id: item.id, // This is the show slug, not a doc ID. The modal will need to handle this.
-        collectionPath: `users/${user.uid}/media`, // This is simplified.
-        kind: 'episode',
+        id: String(show.id), // Doc ID is the tmdbShowId
+        collectionPath: `users/${user.uid}/shows`,
+        kind: 'show',
         current: {
-            showTitle: item.title,
-            posterUrl: item.posterUrl,
+            title: show.title,
+            displayTitle: show.displayTitle,
+            tmdbId: show.tmdbShowId,
+            posterUrl: show.posterUrl,
+            backdropUrl: show.backdropUrl,
+            videoLink: show.videoLink,
         }
     });
   };
 
-  const handleApplied = (id: string, patch: Partial<ShowListItem>) => {
-    setEpisodes(prev =>
-        prev.map(ep => {
-            const showId = deriveShowName(ep as any);
-            if (showId === id) {
-                return { ...ep, ...patch };
-            }
-            return ep;
-        })
+  const handleApplied = (id: string, patch: Partial<ShowDoc>) => {
+    setShows(prev =>
+        prev.map(s => String(s.id) === id ? { ...s, ...patch } : s)
     );
   };
 
   const sentinelRef = useRef(null);
   attachSentinel(sentinelRef.current);
 
-  const showInitialLoading = loading && episodes.length === 0;
+  const showInitialLoading = loading && shows.length === 0;
 
   return (
     <div className="space-y-6">
@@ -134,7 +131,7 @@ function TvLibrary() {
         <div className="flex flex-col items-center justify-center text-center border-2 border-dashed border-muted rounded-lg py-20">
           <Tv className="h-16 w-16 text-muted-foreground" />
           <h2 className="mt-6 text-2xl font-headline text-foreground">No TV Shows Found</h2>
-          <p className="mt-2 text-muted-foreground">Your TV library is empty. Connect an agent to add media.</p>
+          <p className="mt-2 text-muted-foreground">Your TV library is empty. Connect an agent to add media or run the materializer function.</p>
         </div>
       )}
       
