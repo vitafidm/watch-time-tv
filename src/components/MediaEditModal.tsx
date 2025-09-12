@@ -234,8 +234,7 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
     }
 
     try {
-        const idToken = await user.getIdToken();
-        await callFunction('tmdbManualSet', payload, idToken);
+        await callFunction('tmdbManualSet', payload);
         toast({ title: "Artwork Updated", description: `The ${type} has been set.` });
         onApplied?.(item.id, patch);
     } catch (err: any) {
@@ -391,3 +390,5 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
     </Dialog>
   );
 }
+
+    
