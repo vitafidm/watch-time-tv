@@ -6,7 +6,7 @@ import ProtectedRoute from "@/components/ProtectedRoute";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tv } from "lucide-react";
 import type { MediaDoc } from "@/lib/db.types";
-import { useMemo, useRef, useState, useEffect } from "react";
+import { useMemo, useRef, useState, useEffect, useCallback } from "react";
 import Image from "next/image";
 import { useInfiniteFirestore } from "@/hooks/useInfiniteFirestore";
 import { MediaEditButton } from "@/components/MediaEditButton";
@@ -57,12 +57,12 @@ function ShowCard({ item, onEdit }: { item: ShowDoc, onEdit: () => void; }) {
 
 function TvLibrary() {
   const { user } = useAuthUser();
-  const { items: fetchedShows, loading, hasMore, attachSentinel } = useInfiniteFirestore<ShowDoc>({
+  const { items: fetchedShows, loading, hasMore, attachSentinel, reset } = useInfiniteFirestore<ShowDoc>({
       collectionPath: user ? `users/${user.uid}/shows` : undefined,
       where: [['episodeCount', '>', 0]],
       orderBy: ['updatedAt', 'desc'],
       pageSize: 24,
-      map: (doc) => ({ id: doc.id, ...doc.data() } as ShowDoc),
+      map: (doc) => ({ id: doc.id, ...doc.data(), tmdbShowId: Number(doc.id) } as ShowDoc),
   });
 
   const [shows, setShows] = useState<ShowDoc[]>([]);
@@ -89,11 +89,11 @@ function TvLibrary() {
     });
   };
 
-  const handleApplied = (id: string, patch: Partial<ShowDoc>) => {
+  const handleApplied = useCallback((id: string, patch: Partial<ShowDoc>) => {
     setShows(prev =>
         prev.map(s => String(s.id) === id ? { ...s, ...patch } : s)
     );
-  };
+  }, []);
 
   const sentinelRef = useRef(null);
   attachSentinel(sentinelRef.current);
@@ -154,3 +154,5 @@ export default function TvLibraryPage() {
         </ProtectedRoute>
     )
 }
+
+    

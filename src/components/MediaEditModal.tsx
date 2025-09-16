@@ -15,6 +15,7 @@ import { useAuthUser } from "@/hooks/useAuthUser";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
+import { useRouter } from "next/navigation";
 
 export interface MediaEditModalItem {
   id: string; // Firestore doc ID (can be movie ID or tmdbShowId)
@@ -66,6 +67,7 @@ function titleForSearch(item: MediaEditModalItem | null): string | null {
 export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModalProps) {
   const { toast } = useToast();
   const { user } = useAuthUser();
+  const router = useRouter();
 
   const [searchQuery, setSearchQuery] = React.useState("");
   const [searchResults, setSearchResults] = React.useState<SearchResult[]>([]);
@@ -81,7 +83,7 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
 
   const displayTitleText = item?.current.displayTitle || item?.current.title || item?.current.showTitle || "Unknown Media";
   const isMovie = item?.kind === 'movie';
-  const isShowOrEpisode = item?.kind === 'show' || item?.kind === 'episode';
+  const isShow = item?.kind === 'show';
 
   const fetchMediaData = React.useCallback(async (kind: 'movie' | 'tv', tmdbId: number) => {
     if (!user) return;
@@ -107,7 +109,7 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
       return;
     }
     
-    const apiKind = isMovie ? 'movie' : 'tv';
+    const apiKind = isMovie || isShow ? 'tv' : 'movie';
 
     async function preload() {
       if (!user) return;
@@ -116,14 +118,14 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
       const idToken = await user.getIdToken();
       let tmdbId: number | null = item.current?.tmdbId ?? null;
       
-      // Legacy path for episodes before the `shows` collection existed
-      if (!tmdbId && item.kind === 'episode') {
+      if (isShow) {
+        tmdbId = Number(item.id);
+      } else if (item.kind === 'episode') {
         tmdbId = tmdbIdFromShowRef(item.current?.showRef);
       }
       
       let matchTitle: string | null = null;
 
-      // If we don't already have an id, do a soft search to find one for preview
       if (!tmdbId) {
         const q = titleForSearch(item);
         if (q) {
@@ -139,7 +141,6 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
           }
         }
       } else {
-        // We already know the id; set a selectedMatch for convenience (preview only)
         matchTitle = titleForSearch(item) || '';
         setSelectedMatch({ kind: apiKind, tmdbId, title: matchTitle });
       }
@@ -149,17 +150,11 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
         return;
       }
 
-      setMediaLoading(true);
-      try {
-        const data = await callFunction('tmdbMedia', { kind: apiKind, tmdbId }, idToken);
-        setMediaData(data as any);
-      } finally {
-        setMediaLoading(false);
-      }
+      fetchMediaData(apiKind, tmdbId);
     }
 
     preload();
-  }, [open, item, user, isMovie]);
+  }, [open, item, user, isMovie, isShow, fetchMediaData]);
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -181,7 +176,7 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
 
   const handleSelectMatch = (result: SearchResult) => {
     if (!item) return;
-    const apiKind = isMovie ? 'movie' : 'tv';
+    const apiKind = isMovie || isShow ? 'tv' : 'movie';
     setSelectedMatch({ kind: apiKind, tmdbId: result.id, title: result.title });
     fetchMediaData(apiKind, result.id);
   };
@@ -192,25 +187,36 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
     try {
       const idToken = await user.getIdToken();
       
-      const payload: any = {
-        collection: item.collectionPath,
-        docId: item.id,
-        kind: isMovie ? 'movie' : 'tv', // 'show' maps to 'tv' on the backend
-        tmdbId: selectedMatch.tmdbId,
-        updateDisplayTitle,
-        includeCast: true,
+      if (item.kind === 'show') {
+        await callFunction('tmdbFixShow', {
+          uid: user.uid,
+          oldShowId: Number(item.id),
+          newShowId: selectedMatch.tmdbId,
+          keepOverrides: true,
+        }, idToken);
+        toast({ title: "Show Match Updated", description: `Successfully re-matched with "${selectedMatch.title}". Refreshing list...` });
+        router.refresh();
+      } else {
+         const payload: any = {
+          collection: item.collectionPath,
+          docId: item.id,
+          kind: isMovie ? 'movie' : 'tv', // 'episode' maps to 'tv' on the backend
+          tmdbId: selectedMatch.tmdbId,
+          updateDisplayTitle,
+          includeCast: true,
+        };
+        await callFunction('tmdbFixMatch', payload, idToken);
+        toast({ title: "Match Updated", description: `Successfully matched with "${selectedMatch.title}".` });
+        const patch: Partial<any> = {};
+        if (updateDisplayTitle) {
+          const newTitle = selectedMatch.title;
+          patch.displayTitle = newTitle;
+          if (item.kind === 'show') {
+            patch.title = newTitle;
+          }
+        }
+        onApplied?.(item.id, patch);
       }
-      
-      await callFunction('tmdbFixMatch', payload, idToken);
-
-      toast({ title: "Match Updated", description: `Successfully matched with "${selectedMatch.title}".` });
-
-      const patch: Partial<any> = {};
-      if (updateDisplayTitle) {
-        patch.displayTitle = selectedMatch.title;
-        patch.title = selectedMatch.title; // Also update raw title for shows collection
-      }
-      onApplied?.(item.id, patch);
 
       onClose();
     } catch (err: any) {
@@ -429,3 +435,5 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
     </Dialog>
   );
 }
+
+    
