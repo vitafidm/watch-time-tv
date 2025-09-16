@@ -14,13 +14,13 @@ import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { ENV } from "@/lib/env";
 import { useInfiniteFirestore } from "@/hooks/useInfiniteFirestore";
-import { cleanMovieTitle } from "@/lib/movieTitle";
+import { cleanTitleFromFilename } from "@/lib/cleanTitle";
 import { MediaEditButton } from "@/components/MediaEditButton";
 import { MediaEditModal, type MediaEditModalItem } from "@/components/MediaEditModal";
 
 // A version of MediaCard that works with MediaDoc from Firestore
 function MediaDocCard({ item, onEdit }: { item: MediaDoc & {id: string}, onEdit: () => void; }) {
-    const displayTitle = useMemo(() => cleanMovieTitle(item as any), [item]);
+    const displayTitle = (item as any).displayTitle || item.title || cleanTitleFromFilename(item.filename || "");
 
     const mediaItem = useMemo(() => {
         // Safely determine the release date, handling both Timestamp objects and ISO strings.
