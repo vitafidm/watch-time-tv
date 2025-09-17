@@ -1,73 +1,116 @@
-import * as functions from 'firebase-functions';
-import cors from 'cors';
-import fetch from 'node-fetch';
+import * as functions from "firebase-functions";
+import cors from "cors";
+import fetch from "node-fetch";
+import { posterUrl } from "./tmdbClient"; // keep using your existing helper
 
 const corsHandler = cors({ origin: true });
 
-export default functions.https.onRequest((req, res) => {
-  corsHandler(req, res, async () => {
-    // --- CORS preflight
-    if (req.method === 'OPTIONS') {
-      res.set('Access-Control-Allow-Origin', req.headers.origin || '*');
-      res.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
-      res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-      res.status(204).send('');
-      return;
-    }
+type KindParam = "movie" | "tv" | "show";
+function mapKind(kind: KindParam): "movie" | "tv" {
+  return kind === "show" ? "tv" : kind;
+}
 
-    if (req.method !== 'POST') {
-      res.set('Access-Control-Allow-Origin', req.headers.origin || '*');
-      res.status(405).json({ error: 'Method Not Allowed' });
+export default functions.https.onRequest(async (req, res) => {
+  corsHandler(req, res, async () => {
+    if (req.method !== "POST") {
+      res.status(405).json({ error: "Method Not Allowed" });
       return;
     }
 
     try {
-      res.set('Access-Control-Allow-Origin', req.headers.origin || '*');
+      const { kind, tmdbId, language } = req.body || {};
+      const k = mapKind(kind as KindParam);
+      const idNum = Number(tmdbId);
 
-      const { kind, tmdbId } = req.body;
-      if ((kind !== 'movie' && kind !== 'tv') || !tmdbId) {
-        res.status(400).json({ error: 'Invalid parameters' });
+      if (!idNum || Number.isNaN(idNum)) {
+        functions.logger.error("tmdbMedia: invalid tmdbId", { tmdbId });
+        res.status(400).json({ error: "Invalid tmdbId" });
+        return;
+      }
+      if (k !== "movie" && k !== "tv") {
+        functions.logger.error("tmdbMedia: invalid kind", { kind });
+        res.status(400).json({ error: "Invalid kind. Use 'movie' or 'tv'." });
         return;
       }
 
-      const apiKey = functions.config().tmdb.key;
-      const url = `https://api.themoviedb.org/3/${kind}/${tmdbId}?api_key=${apiKey}&append_to_response=images,videos`;
-
-      const tmdbRes = await fetch(url);
-      if (!tmdbRes.ok) {
-        throw new Error(`TMDB fetch failed: ${tmdbRes.statusText}`);
+      const apiKey =
+        (functions.config()?.tmdb && functions.config().tmdb.key) ||
+        process.env.TMDB_API_KEY;
+      if (!apiKey) {
+        functions.logger.error("tmdbMedia: missing TMDB API key");
+        res.status(500).json({ error: "TMDB API key not configured" });
+        return;
       }
 
-      const data = await tmdbRes.json();
+      // Build TMDB URL (inline base URL; your tmdbClient didn’t export one)
+      const url = new URL(`https://api.themoviedb.org/3/${k}/${idNum}`);
+      url.searchParams.set("api_key", apiKey);
+      url.searchParams.set("append_to_response", "images,videos");
+      // Accept original + English + optional requested language
+      url.searchParams.set(
+        "include_image_language",
+        ["null", "en", language].filter(Boolean).join(",")
+      );
+      if (language) url.searchParams.set("language", language);
 
-      const posters = (data.images?.posters || []).map((p: any) => ({
-        url: `https://image.tmdb.org/t/p/w500${p.file_path}`,
-        width: p.width,
-        height: p.height,
-        lang: p.iso_639_1,
-      }));
+      functions.logger.info("tmdbMedia: fetching", {
+        url: url.toString(),
+        kind: k,
+        idNum,
+      });
 
-      const backdrops = (data.images?.backdrops || []).map((b: any) => ({
-        url: `https://image.tmdb.org/t/p/w780${b.file_path}`,
-        width: b.width,
-        height: b.height,
-        lang: b.iso_639_1,
-      }));
+      const resp = await fetch(url.toString());
+      if (!resp.ok) {
+        const text = await resp.text().catch(() => "");
+        functions.logger.error("tmdbMedia: TMDB fetch failed", {
+          status: resp.status,
+          text: text?.slice(0, 400),
+        });
+        res.status(502).json({ error: `TMDB responded ${resp.status}` });
+        return;
+      }
 
-      const videos = (data.videos?.results || [])
-        .filter((v: any) => v.site === 'YouTube')
-        .map((v: any) => ({
-          key: v.key,
-          site: v.site,
-          type: v.type,
-          name: v.name,
-          thumbnailUrl: `https://i.ytimg.com/vi/${v.key}/hqdefault.jpg`,
-        }));
+      const data: any = await resp.json();
 
-      res.status(200).json({ posters, backdrops, videos });
-    } catch (error: any) {
-      functions.logger.error('Error in tmdbMedia:', error);
-      res.status(500).json({ error: 'Internal server error' });
+      // Normalize posters/backdrops using your posterUrl helper.
+      // Sizes allowed by your typing: "w185" | "w500" | "original"
+      const posters =
+        Array.isArray(data?.images?.posters)
+          ? data.images.posters
+              .filter((p: any) => p?.file_path)
+              .slice(0, 60)
+              .map((p: any) => ({ url: posterUrl(p.file_path, "w500") }))
+          : [];
+
+      const backdrops =
+        Array.isArray(data?.images?.backdrops)
+          ? data.images.backdrops
+              .filter((b: any) => b?.file_path)
+              .slice(0, 60)
+              .map((b: any) => ({ url: posterUrl(b.file_path, "original") }))
+          : [];
+
+      // Normalize videos (YouTube trailers)
+      const videos =
+        Array.isArray(data?.videos?.results)
+          ? data.videos.results
+              .filter((v: any) => v?.site === "YouTube" && v?.key)
+              .slice(0, 30)
+              .map((v: any) => ({
+                key: v.key,
+                name: v.name,
+                type: v.type,
+                thumbnailUrl: `https://i.ytimg.com/vi/${v.key}/hqdefault.jpg`,
+              }))
+          : [];
+
+      res.json({ posters, backdrops, videos });
+    } catch (err: any) {
+      functions.logger.error("tmdbMedia: internal error", {
+        message: err?.message,
+        stack: err?.stack,
+      });
+      res.status(500).json({ error: "Internal error in tmdbMedia" });
     }
   });
 });

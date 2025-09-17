@@ -2,6 +2,8 @@
 import * as crypto from 'crypto';
 import * as admin from 'firebase-admin';
 import { z } from 'zod';
+import { normalizeTitle } from '../src/lib/normalizeTitle';
+import { parseEpisodeFromName } from '../src/lib/episodeParser';
 
 const db = admin.firestore();
 
@@ -53,8 +55,15 @@ const MediaItemSchema = z.object({
   posterUrl: z.string().url().optional(),
   backdropUrl: z.string().url().optional(),
   tmdbId: z.number().int().optional(),
-  // -------- CHANGED: accept ISO string OR millis number --------
-  addedAt: z.union([z.string().datetime({ message: 'Invalid ISO 8601 datetime format' }), z.number()]).optional()
+  addedAt: z.union([z.string().datetime({ message: 'Invalid ISO 8601 datetime format' }), z.number()]).optional(),
+  
+  // New optional fields (server-computed)
+  librarySection: z.enum(['movies','tv']).optional(),
+  normalizedTitle: z.string().nullable().optional(),
+  episodeNumber: z.number().int().nullable().optional(),
+  matchConfidence: z.number().min(0).max(1).nullable().optional(),
+  matchMethod: z.enum(['title+year','show+S/E','manual']).nullable().optional(),
+  manualOverride: z.boolean().optional(),
 });
 
 // Zod schema for the entire agent ingest request body.
@@ -74,7 +83,6 @@ function timingSafeHexEquals(aHex: string, bHex: string): boolean {
   const a = Buffer.from(aHex, 'hex');
   const b = Buffer.from(bHex, 'hex');
   if (a.length !== b.length) {
-    // To prevent leaking length info, perform a dummy comparison.
     crypto.timingSafeEqual(a, Buffer.alloc(a.length));
     return false;
   }
@@ -102,13 +110,20 @@ function stableMediaId(serverId: string, path: string): string {
   return h.digest('hex');
 }
 
+function deriveLibrarySection(path: string): 'movies' | 'tv' | undefined {
+    const segments = path.toLowerCase().split(/[\\/]/);
+    if (segments.includes('movies')) return 'movies';
+    if (segments.includes('tv')) return 'tv';
+    return undefined;
+}
+
+
 export type IngestResult = { mediaId?: string; status: 'upserted' | 'error'; message?: string; path?: string };
 
 /**
  * Main flow for handling agent media ingest requests.
  */
 export async function agentIngestFlow(rawInput: unknown): Promise<{ results: IngestResult[]; ownerUid: string | null; serverId: string | null }> {
-  // 1. Validate the entire input including API key and items array.
   const parsedInput = AgentIngestInputSchema.safeParse(rawInput);
   if (!parsedInput.success) {
     const errorMessages = parsedInput.error.issues.map(issue => issue.message).join(', ');
@@ -118,12 +133,10 @@ export async function agentIngestFlow(rawInput: unknown): Promise<{ results: Ing
 
   const { apiKey, items } = parsedInput.data;
 
-  // Optimization: if no items, do nothing.
   if (items.length === 0) {
     return { results: [], ownerUid: null, serverId: null };
   }
 
-  // 2. Resolve the server by API key.
   const serversSnap = await db.collectionGroup('servers').where('status', '==', 'linked').get();
 
   let matchedRef: FirebaseFirestore.DocumentReference | null = null;
@@ -137,9 +150,9 @@ export async function agentIngestFlow(rawInput: unknown): Promise<{ results: Ing
     const computedHash = await scryptHex(apiKey, data.salt, 64);
     if (timingSafeHexEquals(computedHash, data.apiKeyHash)) {
       matchedRef = docSnap.ref;
-      ownerUid = docSnap.ref.parent.parent?.id ?? null; // /users/{uid}/servers/{serverId}
+      ownerUid = docSnap.ref.parent.parent?.id ?? null;
       serverId = data.serverId || docSnap.ref.id;
-      break; // Found our match
+      break;
     }
   }
 
@@ -149,62 +162,83 @@ export async function agentIngestFlow(rawInput: unknown): Promise<{ results: Ing
     throw err;
   }
 
-  // 3. Update the agent's last seen timestamp (fire-and-forget).
   matchedRef.update({ lastSeen: admin.firestore.FieldValue.serverTimestamp() }).catch(e => console.error(`Failed to update lastSeen for ${serverId}`, e));
 
-  // 4. Process items in batches.
-  const BATCH_SIZE = 450; // Keep a margin below the 500-write limit.
+  const BATCH_SIZE = 450;
   const results: IngestResult[] = [];
   let batch = db.batch();
   let opsInBatch = 0;
 
   for (const item of items) {
     try {
-      // Re-validate each item individually to provide per-item error messages.
       MediaItemSchema.parse(item);
 
       const mid = item.mediaId || stableMediaId(serverId, item.path);
       const docRef = db.doc(`users/${ownerUid}/media/${mid}`);
+      
+      const existingDoc = await docRef.get().then(s => s.exists ? s.data() : null);
 
       const dataToUpsert: any = {
         ...item,
         mediaId: mid,
         serverId,
-        season: item.season ?? null,
-        episode: item.episode ?? null,
-        year: item.year ?? null,
-        codec: item.codec ?? null,
-        posterUrl: item.posterUrl ?? null,
-        backdropUrl: item.backdropUrl ?? null,
-        tmdbId: item.tmdbId ?? null,
-        status: 'indexed',
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       };
-
-      // -------- CHANGED: force addedAt to be a Firestore Timestamp when provided --------
+      
       if (typeof item.addedAt !== 'undefined') {
         dataToUpsert.addedAt = toTimestamp(item.addedAt);
       }
-      // If you want to *always* set addedAt on first create and never touch it again,
-      // you can later add a try-create path for new docs. For now we only set when provided.
+
+      // --- NEW FIELD DERIVATION ---
+      const recomputeHelpers = !existingDoc || existingDoc.type !== item.type;
+      
+      if (recomputeHelpers || existingDoc.librarySection === undefined) {
+          dataToUpsert.librarySection = deriveLibrarySection(item.path);
+      }
+
+      if (item.type === 'episode') {
+        if (recomputeHelpers || existingDoc.season === undefined || existingDoc.episodeNumber === undefined) {
+            const parsed = parseEpisodeFromName(item.filename);
+            dataToUpsert.season = parsed.season;
+            dataToUpsert.episodeNumber = parsed.episodeNumber;
+        }
+        if (recomputeHelpers || existingDoc.normalizedTitle === undefined) {
+            dataToUpsert.normalizedTitle = null;
+        }
+      } else if (item.type === 'movie') {
+        if (recomputeHelpers || existingDoc.normalizedTitle === undefined) {
+           dataToUpsert.normalizedTitle = normalizeTitle({ ...item });
+        }
+        if (recomputeHelpers || existingDoc.season === undefined || existingDoc.episodeNumber === undefined) {
+            dataToUpsert.season = null;
+            dataToUpsert.episodeNumber = null;
+        }
+      }
+      
+      if (existingDoc?.matchConfidence === undefined) dataToUpsert.matchConfidence = null;
+      if (existingDoc?.matchMethod === undefined) dataToUpsert.matchMethod = null;
+      if (existingDoc?.manualOverride === undefined) dataToUpsert.manualOverride = false;
+      
+      // --- END NEW FIELD DERIVATION ---
 
       batch.set(docRef, dataToUpsert, { merge: true });
       opsInBatch++;
       results.push({ mediaId: mid, status: 'upserted', path: item.path });
+      
+      console.log(`Ingest: mediaId=${mid} type=${item.type} lib=${dataToUpsert.librarySection || '-'} normTitle=${dataToUpsert.normalizedTitle || '-'} S=${dataToUpsert.season ?? '-'} E=${dataToUpsert.episodeNumber ?? '-'}`);
+
 
       if (opsInBatch >= BATCH_SIZE) {
         await batch.commit();
-        batch = db.batch(); // Start a new batch
+        batch = db.batch();
         opsInBatch = 0;
       }
     } catch (e: any) {
-      // If an individual item fails validation or processing.
       const message = e instanceof z.ZodError ? JSON.stringify(e.issues) : (e.message || 'Unknown processing error');
       results.push({ status: 'error', message, path: (item as any)?.path });
     }
   }
 
-  // Commit any remaining writes in the last batch.
   if (opsInBatch > 0) {
     await batch.commit();
   }

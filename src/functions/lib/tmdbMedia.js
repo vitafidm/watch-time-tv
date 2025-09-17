@@ -39,62 +39,96 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const functions = __importStar(require("firebase-functions"));
 const cors_1 = __importDefault(require("cors"));
 const node_fetch_1 = __importDefault(require("node-fetch"));
+const tmdbClient_1 = require("./tmdbClient"); // keep using your existing helper
 const corsHandler = (0, cors_1.default)({ origin: true });
-exports.default = functions.https.onRequest((req, res) => {
+function mapKind(kind) {
+    return kind === "show" ? "tv" : kind;
+}
+exports.default = functions.https.onRequest(async (req, res) => {
     corsHandler(req, res, async () => {
-        // --- CORS preflight
-        if (req.method === 'OPTIONS') {
-            res.set('Access-Control-Allow-Origin', req.headers.origin || '*');
-            res.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
-            res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-            res.status(204).send('');
-            return;
-        }
-        if (req.method !== 'POST') {
-            res.set('Access-Control-Allow-Origin', req.headers.origin || '*');
-            res.status(405).json({ error: 'Method Not Allowed' });
+        if (req.method !== "POST") {
+            res.status(405).json({ error: "Method Not Allowed" });
             return;
         }
         try {
-            res.set('Access-Control-Allow-Origin', req.headers.origin || '*');
-            const { kind, tmdbId } = req.body;
-            if ((kind !== 'movie' && kind !== 'tv') || !tmdbId) {
-                res.status(400).json({ error: 'Invalid parameters' });
+            const { kind, tmdbId, language } = req.body || {};
+            const k = mapKind(kind);
+            const idNum = Number(tmdbId);
+            if (!idNum || Number.isNaN(idNum)) {
+                functions.logger.error("tmdbMedia: invalid tmdbId", { tmdbId });
+                res.status(400).json({ error: "Invalid tmdbId" });
                 return;
             }
-            const apiKey = functions.config().tmdb.key;
-            const url = `https://api.themoviedb.org/3/${kind}/${tmdbId}?api_key=${apiKey}&append_to_response=images,videos`;
-            const tmdbRes = await (0, node_fetch_1.default)(url);
-            if (!tmdbRes.ok) {
-                throw new Error(`TMDB fetch failed: ${tmdbRes.statusText}`);
+            if (k !== "movie" && k !== "tv") {
+                functions.logger.error("tmdbMedia: invalid kind", { kind });
+                res.status(400).json({ error: "Invalid kind. Use 'movie' or 'tv'." });
+                return;
             }
-            const data = await tmdbRes.json();
-            const posters = (data.images?.posters || []).map((p) => ({
-                url: `https://image.tmdb.org/t/p/w500${p.file_path}`,
-                width: p.width,
-                height: p.height,
-                lang: p.iso_639_1,
-            }));
-            const backdrops = (data.images?.backdrops || []).map((b) => ({
-                url: `https://image.tmdb.org/t/p/w780${b.file_path}`,
-                width: b.width,
-                height: b.height,
-                lang: b.iso_639_1,
-            }));
-            const videos = (data.videos?.results || [])
-                .filter((v) => v.site === 'YouTube')
-                .map((v) => ({
-                key: v.key,
-                site: v.site,
-                type: v.type,
-                name: v.name,
-                thumbnailUrl: `https://i.ytimg.com/vi/${v.key}/hqdefault.jpg`,
-            }));
-            res.status(200).json({ posters, backdrops, videos });
+            const apiKey = (functions.config()?.tmdb && functions.config().tmdb.key) ||
+                process.env.TMDB_API_KEY;
+            if (!apiKey) {
+                functions.logger.error("tmdbMedia: missing TMDB API key");
+                res.status(500).json({ error: "TMDB API key not configured" });
+                return;
+            }
+            // Build TMDB URL (inline base URL; your tmdbClient didn’t export one)
+            const url = new URL(`https://api.themoviedb.org/3/${k}/${idNum}`);
+            url.searchParams.set("api_key", apiKey);
+            url.searchParams.set("append_to_response", "images,videos");
+            // Accept original + English + optional requested language
+            url.searchParams.set("include_image_language", ["null", "en", language].filter(Boolean).join(","));
+            if (language)
+                url.searchParams.set("language", language);
+            functions.logger.info("tmdbMedia: fetching", {
+                url: url.toString(),
+                kind: k,
+                idNum,
+            });
+            const resp = await (0, node_fetch_1.default)(url.toString());
+            if (!resp.ok) {
+                const text = await resp.text().catch(() => "");
+                functions.logger.error("tmdbMedia: TMDB fetch failed", {
+                    status: resp.status,
+                    text: text?.slice(0, 400),
+                });
+                res.status(502).json({ error: `TMDB responded ${resp.status}` });
+                return;
+            }
+            const data = await resp.json();
+            // Normalize posters/backdrops using your posterUrl helper.
+            // Sizes allowed by your typing: "w185" | "w500" | "original"
+            const posters = Array.isArray(data?.images?.posters)
+                ? data.images.posters
+                    .filter((p) => p?.file_path)
+                    .slice(0, 60)
+                    .map((p) => ({ url: (0, tmdbClient_1.posterUrl)(p.file_path, "w500") }))
+                : [];
+            const backdrops = Array.isArray(data?.images?.backdrops)
+                ? data.images.backdrops
+                    .filter((b) => b?.file_path)
+                    .slice(0, 60)
+                    .map((b) => ({ url: (0, tmdbClient_1.posterUrl)(b.file_path, "original") }))
+                : [];
+            // Normalize videos (YouTube trailers)
+            const videos = Array.isArray(data?.videos?.results)
+                ? data.videos.results
+                    .filter((v) => v?.site === "YouTube" && v?.key)
+                    .slice(0, 30)
+                    .map((v) => ({
+                    key: v.key,
+                    name: v.name,
+                    type: v.type,
+                    thumbnailUrl: `https://i.ytimg.com/vi/${v.key}/hqdefault.jpg`,
+                }))
+                : [];
+            res.json({ posters, backdrops, videos });
         }
-        catch (error) {
-            functions.logger.error('Error in tmdbMedia:', error);
-            res.status(500).json({ error: 'Internal server error' });
+        catch (err) {
+            functions.logger.error("tmdbMedia: internal error", {
+                message: err?.message,
+                stack: err?.stack,
+            });
+            res.status(500).json({ error: "Internal error in tmdbMedia" });
         }
     });
 });

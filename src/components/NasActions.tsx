@@ -22,14 +22,14 @@ function cleanBaseUrl(s?: string) {
 type Msg = { kind: "ok" | "err"; text: React.ReactNode };
 
 export default function NasActions() {
-  const { config } = useServerConfig();
+  const { config, loading } = useServerConfig();
   const { toast } = useToast();
-  const base = cleanBaseUrl(config.backendUrl);
+  const base = cleanBaseUrl(config?.backendUrl);
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<Msg | null>(null);
 
   const isBusy = !!busy;
-  const isDisabled = !base || isBusy;
+  const isDisabled = loading || !base || isBusy;
 
   async function hit(path: string, init?: RequestInit) {
     const url = `${base}${path}`;

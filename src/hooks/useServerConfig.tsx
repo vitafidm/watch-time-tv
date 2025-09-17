@@ -1,73 +1,73 @@
-// src/hooks/useServerConfig.tsx
-import { useEffect, useMemo, useState, createContext, useContext, ReactNode } from "react";
+"use client";
+
+import {
+  useEffect,
+  useMemo,
+  useState,
+  createContext,
+  useContext,
+  ReactNode,
+} from "react";
 import { onAuthStateChanged, User } from "firebase/auth";
 import { auth } from "@/lib/firebase.client";
 import { loadServerConfig, saveServerConfig, ServerConfig } from "@/lib/userProfile";
 
-const DEFAULTS: ServerConfig = {
-  provider: "direct",
-  backendUrl: "",
-  mediaRoots: { moviesPath: "", tvPath: "" }
+type Ctx = {
+  user: User | null;
+  config: ServerConfig | null;
+  loading: boolean;
+  save: (cfg: Partial<ServerConfig>) => Promise<void>;
 };
 
-interface ServerConfigContextType {
-    config: ServerConfig;
-    setConfig: React.Dispatch<React.SetStateAction<ServerConfig>>;
-    loading: boolean;
-    saving: boolean;
-    persist: (next: ServerConfig) => Promise<void>;
-    authed: boolean;
-    user: User | null;
-}
-
-const ServerConfigContext = createContext<ServerConfigContextType | undefined>(undefined);
+const ServerConfigContext = createContext<Ctx | undefined>(undefined);
 
 export function ServerConfigProvider({ children }: { children: ReactNode }) {
-    const [user, setUser] = useState<User | null>(null);
-    const [config, setConfig] = useState<ServerConfig>(DEFAULTS);
-    const [loading, setLoading] = useState(true);
-    const [saving, setSaving] = useState(false);
-    const authed = useMemo(() => !!user, [user]);
+  const [user, setUser] = useState<User | null>(null);
+  const [config, setConfig] = useState<ServerConfig | null>(null);
+  const [loading, setLoading] = useState(true);
 
-    useEffect(() => {
-        const off = onAuthStateChanged(auth, async (u) => {
-        setUser(u);
-        if (!u) {
-            setConfig(DEFAULTS);
-            setLoading(false);
-            return;
-        }
-        const sc = await loadServerConfig(u.uid);
-        setConfig(sc ?? DEFAULTS);
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, async (u) => {
+      setUser(u);
+      if (!u) {
+        setConfig(null);
         setLoading(false);
-        });
-        return () => off();
-    }, []);
+        return;
+      }
+      setLoading(true);
+      try {
+        const cfg = await loadServerConfig(u.uid);
+        setConfig(cfg ?? null);
+      } finally {
+        setLoading(false);
+      }
+    });
+    return () => unsub();
+  }, []);
 
-    async function persist(next: ServerConfig) {
-        if (!user) throw new Error("Not signed in");
-        setSaving(true);
-        try {
-        await saveServerConfig(user.uid, next);
-        setConfig(next);
-        } finally {
-        setSaving(false);
-        }
-    }
-    
-    const value = { authed, user, config, setConfig, loading, saving, persist };
+  const save = async (patch: Partial<ServerConfig>) => {
+    if (!user) return;
+    const next = { ...(config ?? {}), ...patch } as ServerConfig;
+    await saveServerConfig(user.uid, next);
+    setConfig(next);
+  };
 
-    return (
-        <ServerConfigContext.Provider value={value}>
-        {children}
-        </ServerConfigContext.Provider>
-    );
+  const value = useMemo(
+    () => ({ user, config, loading, save }),
+    [user, config, loading]
+  );
+
+  return (
+    <ServerConfigContext.Provider value={value}>
+      {children}
+    </ServerConfigContext.Provider>
+  );
 }
 
 export function useServerConfig() {
-  const context = useContext(ServerConfigContext);
-  if (context === undefined) {
-    throw new Error('useServerConfig must be used within a ServerConfigProvider');
+  const ctx = useContext(ServerConfigContext);
+  if (ctx === undefined) {
+    throw new Error("useServerConfig must be used within a ServerConfigProvider");
   }
-  return context;
+  return ctx;
 }

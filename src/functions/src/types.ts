@@ -1,3 +1,4 @@
+
 export type MediaDoc = {
   mediaId: string;
   title: string;
@@ -12,6 +13,15 @@ export type MediaDoc = {
   serverId: string;
   addedAt?: FirebaseFirestore.Timestamp;
   updatedAt: FirebaseFirestore.Timestamp;
+  
+  // New matcher fields
+  librarySection?: "movies" | "tv";
+  normalizedTitle?: string | null;
+  episodeNumber?: number | null;
+  matchConfidence?: number | null;
+  matchMethod?: 'title+year' | 'show+S/E' | 'manual' | null;
+  manualOverride?: boolean;
+  
   [key: string]: any;
 };
 

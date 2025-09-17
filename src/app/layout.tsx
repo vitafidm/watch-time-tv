@@ -1,38 +1,48 @@
-import type { Metadata } from 'next';
+// src/app/layout.tsx
+import type { Metadata } from "next";
+import "./globals.css";
+
+import { ServerConfigProvider } from "@/hooks/useServerConfig"; // client component (ok)
 import { Toaster } from "@/components/ui/toaster";
-import { WatchlistProvider } from '@/hooks/use-watchlist';
-import { SearchProvider } from '@/hooks/use-search';
-import { AppHeader } from '@/components/AppHeader';
-import { cn } from '@/lib/utils';
-import './globals.css';
+import { WatchlistProvider } from "@/hooks/use-watchlist";
+import { SearchProvider } from "@/hooks/use-search";
+import { AppHeader } from "@/components/AppHeader";
+import { cn } from "@/lib/utils";
 
 export const metadata: Metadata = {
-  title: 'Private Cinema',
-  description: 'Browse your self-hosted media library.',
+  title: "Private Cinema",
+  description: "Browse your self-hosted media library.",
 };
 
 export default function RootLayout({
   children,
-}: Readonly<{
-  children: React.ReactNode;
-}>) {
+}: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en" className="dark" suppressHydrationWarning>
       <head>
         <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
-        <link href="https://fonts.googleapis.com/css2?family=Exo+2:wght@700&family=Inter:wght@400;700&display=swap" rel="stylesheet" />
+        <link
+          rel="preconnect"
+          href="https://fonts.gstatic.com"
+          crossOrigin="anonymous"
+        />
+        <link
+          href="https://fonts.googleapis.com/css2?family=Exo+2:wght@700&family=Inter:wght@400;700&display=swap"
+          rel="stylesheet"
+        />
       </head>
       <body className={cn("font-body antialiased", "bg-background text-foreground")}>
         <Toaster />
-        <SearchProvider>
-          <WatchlistProvider>
-            <div className="flex min-h-screen w-full flex-col">
-              <AppHeader />
-              <main className="flex-1 p-4 sm:p-6">{children}</main>
-            </div>
-          </WatchlistProvider>
-        </SearchProvider>
+        <ServerConfigProvider>
+          <SearchProvider>
+            <WatchlistProvider>
+              <div className="flex min-h-screen w-full flex-col">
+                <AppHeader />
+                <main className="flex-1 p-4 sm:p-6">{children}</main>
+              </div>
+            </WatchlistProvider>
+          </SearchProvider>
+        </ServerConfigProvider>
       </body>
     </html>
   );
