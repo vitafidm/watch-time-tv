@@ -1,74 +1,125 @@
+// src/lib/normalizeTitle.ts
+import path from "path";
 
 /**
- * A set of common "release junk" tokens to be removed from titles.
- * This list is case-insensitive.
- */
-const RELEASE_JUNK = new Set([
-  'bluray', 'web-dl', 'webdl', 'webrip', 'hdrip', 'x264', 'x265', 'h264', 'h265',
-  'hevc', 'av1', '10bit', '1080p', '2160p', '720p', '4k', 'uhd', 'hdr', 'multi',
-  'ddp5.1', 'esub', 'rav1ne', 'av1d', 'mcx',
-]);
-
-/**
- * A set of regexes to remove descriptive prefixes.
- */
-const PREFIX_JUNK: RegExp[] = [
-  /^PRADA presents\s+/i,
-  /^Come Together\s*-\s*an H&M Holiday\s*/i,
-  /^Short Film\s+/i,
-  /^dir\.\s*by\s+.*?\b/i,
-  /^an?\s+H&M\s+Holiday\s+Short\s+Film\s+/i,
-  /^Wes Anderson\s+/i,
-];
-
-/**
- * Cleans and normalizes a movie title from its filename or path components.
- *
- * @param input - The media item's file information.
- * @returns A cleaned title string, or null if a confident title cannot be derived.
+ * Clean a movie title from filename/path.
+ * - Prefer filename stem; if a year exists, cut everything after the year.
+ * - Fall back to parent folder only if it clearly looks like a title folder.
+ * - Strip release junk (codecs, resolutions, groups, audio channels, etc.).
+ * - Preserve stylized hyphens like "WALL-E".
+ * - Episodes always return null (normalizedTitle is movies-only).
  */
 export function normalizeTitle(input: {
   filename: string;
   path: string;
-  type: 'movie' | 'episode';
+  type: "movie" | "episode";
   year?: number | null;
 }): string | null {
-  if (input.type !== 'movie') {
-    return null;
-  }
+  if (input.type !== "movie") return null;
 
-  // 1. Start with filename, remove extension
-  let title = input.filename.replace(/\.[^/.]+$/, '');
+  const junkDirPatterns: RegExp[] = [
+    /^movies?$/i,
+    /^tv$/i,
+    /^shows?$/i,
+    /^plex\s*library$/i,
+    /^library$/i,
+    /^small$/i,
+    /^samples?$/i,
+    /^extras?$/i,
+    /^season\s*\d{1,3}$/i,
+    /^\d{3,4}p$/i,
+  ];
 
-  // 2. Replace common separators
-  title = title.replace(/[._]/g, ' ');
+  const looksLikeTitleDir = (s: string) => {
+    const trimmed = s.trim();
+    if (!trimmed) return false;
+    if (junkDirPatterns.some((re) => re.test(trimmed))) return false;
+    // Accept things like "Inglourious Basterds (2009)" or a non-generic multi-word phrase
+    if (/\(\d{4}\)$/.test(trimmed)) return true;
+    return /[A-Za-z].*[A-Za-z]/.test(trimmed) && trimmed.length >= 6 && !/^\d/.test(trimmed);
+  };
 
-  // 3. Remove parenthesized/bracketed scene tags, but preserve year
-  title = title.replace(/(\[[^\]]+\])/g, (match) => {
-    // Check if the match contains a year-like number, if so, don't remove it.
-    return /\b(19|20)\d{2}\b/.test(match) ? match : '';
-  });
-  
-  // 4. Remove year from title for cleaner processing, will be re-added if needed.
-  title = title.replace(/\(\s*(19|20)\d{2}\s*\)/g, '').replace(/\b(19|20)\d{2}\b/g, '');
-  
-  // 5. Remove junk prefixes
-  for (const re of PREFIX_JUNK) {
-    title = title.replace(re, '');
-  }
+  const filenameStem = path.basename(input.filename, path.extname(input.filename));
+  const parent = path.basename(path.dirname(input.path));
 
-  // 6. Split into words and remove release junk tokens
-  let words = title.split(/\s+/);
-  words = words.filter(word => !RELEASE_JUNK.has(word.toLowerCase()));
-  title = words.join(' ');
-  
-  // 7. Normalize spacing and trim
-  title = title.replace(/\s+/g, ' ').trim();
-  
-  // Return null if the title is empty after cleaning
-  if (!title) {
-    return null;
-  }
+  // If the filename contains a year, cut everything after the first year token.
+  const yearCut = (() => {
+    const m = filenameStem.match(/(19|20)\d{2}/);
+    if (!m) return filenameStem;
+    return filenameStem.slice(0, m.index).trim();
+  })();
 
-  return title;
+  // Prefer filename (possibly cut at year). Fall back to parent if it clearly looks like a title dir.
+  const sourceName = (yearCut && yearCut.length >= 2)
+    ? yearCut
+    : looksLikeTitleDir(parent) ? parent : filenameStem;
+
+  // 1) Replace separators: dots/underscores -> spaces (keep hyphens for WALL-E etc.).
+  let s = sourceName.replace(/[._]+/g, " ");
+
+  // 2) Remove [ ... ] entirely; remove ( ... ) unless it is exactly (YYYY)
+  s = s
+    .replace(/\[[^\]]*\]/g, " ")
+    .replace(/\((?!\d{4}\))[^)]*\)/g, " ");
+
+  // 3) Strip release junk tokens (case-insensitive, roughly whole-word)
+  const junkTokens = [
+    // resolutions
+    /\b(2160p|1080p|720p|480p|4k|uhd)\b/gi,
+    // codecs / audio formats
+    /\b(x264|x265|h\.?264|h\.?265|av1|hevc|aac|ddp(?:5\.1)?|dts(?:-hd)?|truehd)\b/gi,
+    // sources
+    /\b(bluray|blu-ray|webrip|web[-\s]?dl|hdrip|brrip|dvdrip|remux|hdr)\b/gi,
+    // misc scene flags
+    /\b(proper|repack|multi|esub|subs?)\b/gi,
+    // release groups / trailing "-Group"
+    /-\s*[A-Za-z0-9]{2,}$/g,
+    // “opus” (will also remove channel numbers below)
+    /\bopus\b/gi,
+  ];
+  for (const re of junkTokens) s = s.replace(re, " ");
+
+  // 4) Explicitly remove audio channel tokens (handle separators): 5.1, 7.1, 7.1.2, 2.0, etc.
+  s = s
+    .replace(/\b(?:5[._-]?1|7[._-]?1(?:[._-]?2)?|2[._-]?0)\b/gi, " ") // common layouts
+    .replace(/\b(?:mono|stereo)\b/gi, " "); // just in case
+
+  // 5) Remove freestanding year tokens (we already used them for cutting)
+  s = s
+    .replace(/\b(19|20)\d{2}\b/g, " ")
+    .replace(/\(\s*(19|20)\d{2}\s*\)$/g, " ");
+
+  // 6) Collapse whitespace
+  s = s.replace(/\s+/g, " ").trim();
+
+  if (!s) return null;
+
+  // 7) Smart title case while preserving acronyms and hyphenated caps like WALL-E
+  s = s
+    .split(" ")
+    .map((w) => {
+      if (w === w.toUpperCase() && w.length > 1) return w; // keep acronyms
+      if (w.includes("-")) {
+        return w
+          .split("-")
+          .map((seg) =>
+            seg === seg.toUpperCase() && seg.length > 1
+              ? seg
+              : seg.charAt(0).toUpperCase() + seg.slice(1).toLowerCase()
+          )
+          .join("-");
+      }
+      return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase();
+    })
+    .join(" ");
+
+  // 8) If we somehow ended with a trailing tiny numeric token (e.g., "5" or "1"), drop it.
+  s = s.replace(/\s+\d{1,2}$/, "").trim();
+
+  // 9) Final guard: avoid returning generic/junk dir names as titles
+  if (junkDirPatterns.some((re) => re.test(s))) return null;
+
+  return s || null;
 }
+
+export default normalizeTitle;

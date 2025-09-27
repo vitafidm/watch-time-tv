@@ -1,238 +1,310 @@
+import * as functions from "firebase-functions";
+import * as admin from "firebase-admin";
+import cors from "cors";
+import { tmdbEnrichFlow } from "./flows/tmdb-enrich-flow";
 
-import * as functions from 'firebase-functions';
-import * as admin from 'firebase-admin';
-import { db } from './initFirebase';
-import { cleanTitleForSearch, pickYouTubeTrailer } from './titleHelpers';
-import { searchMovie, movieDetails, searchTV, tvDetails, posterUrl, backdropUrl } from './tmdbClient';
+if (!admin.apps.length) admin.initializeApp();
 
+const corsHandler = cors({ origin: true });
 
-// Helper to check if a value is present (not null, undefined, or empty string)
-const isPresent = (val: any) => val !== undefined && val !== null && val !== '';
+type ItemMovie = {
+  mediaId: string;
+  type: "movie";
+  title: string;
+  year?: number;
+};
 
-// Simplified version for this context
-function deriveShowName(ep: any): string {
-    const rawPath = (ep.path || '').replace(/\\/g, '/');
-    if (rawPath) {
-        const segments = rawPath.split('/').filter(Boolean);
-        if (segments.length > 1) {
-            // This is a naive assumption, real logic would be more complex
-            return segments[segments.length - 2];
+type ItemEpisode = {
+  mediaId: string;
+  type: "episode"; // <-- must be "episode", not "tv"
+  title: string;   // <-- show title goes here
+  season: number;
+  episode: number;
+};
+
+function clamp(n: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, n));
+}
+
+function isNum(n: any): n is number {
+  return typeof n === "number" && Number.isFinite(n);
+}
+
+// Very forgiving filename -> showTitle fallback
+function inferShowTitleFromFilename(name: string): string | null {
+  if (!name) return null;
+  // strip extension
+  const base = name.replace(/\.[a-z0-9]+$/i, "");
+  // common patterns: "Show.Name.S01E02", "Show Name - s01e02", "Show (2019) - S01E02 - Title"
+  const m =
+    base.match(/^(.*?)\s*[\.\-\s_]*\(?\d{4}\)?\s*[\-\s_]*[sS]\d{1,2}[eE]\d{1,2}/) ||
+    base.match(/^(.*?)\s*[\-\.\s_]*[sS]\d{1,2}[eE]\d{1,2}/) ||
+    base.match(/^(.*?)\s*-\s*[sS]\d{1,2}[eE]\d{1,2}/) ||
+    base.match(/^(.*?)[\.\s_]+S\d{1,2}E\d{1,2}/);
+
+  const raw = (m?.[1] || base).trim();
+  if (!raw) return null;
+  // de-dot/de-slug
+  return raw.replace(/[._]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+export default functions
+  .runWith({ timeoutSeconds: 540, memory: "1GB" })
+  .https.onRequest(async (req, res) => {
+    corsHandler(req, res, async () => {
+      try {
+        if (req.method !== "POST") {
+          return res
+            .status(405)
+            .json({ error: { status: "METHOD_NOT_ALLOWED", message: "Use POST" } });
         }
-    }
-    // Fallback to a very simple filename parse
-    const rawTitle = ep.title || ep.filename || '';
-    const cleaned = cleanTitleForSearch(rawTitle);
-    return cleaned.title || 'Unknown Show';
-}
 
-async function handleMovie(doc: admin.firestore.DocumentSnapshot, includeCast: boolean) {
-    const data = doc.data()!;
-    const { title, year } = cleanTitleForSearch(data.title || data.filename);
-
-    const searchResults = await searchMovie(title, year);
-    const movieRes = searchResults?.results?.[0];
-    if (!movieRes?.id) {
-        return { id: doc.id, matched: null };
-    }
-
-    const details = await movieDetails(movieRes.id);
-    if (!details) {
-        return { id: doc.id, matched: { tmdbId: movieRes.id, title: movieRes.title } };
-    }
-
-    const updatePayload: Record<string, any> = {};
-
-    if (!isPresent(data.posterUrl) && !data.posterLocked) {
-        updatePayload.posterUrl = posterUrl(details.poster_path, 'w500');
-    }
-    if (!isPresent(data.backdropUrl) && !data.backdropLocked) {
-        updatePayload.backdropUrl = backdropUrl(details.backdrop_path, 'original');
-    }
-    if (!isPresent(data.overview)) {
-        updatePayload.overview = details.overview;
-    }
-    if (!isPresent(data.genres)) {
-        updatePayload.genres = (details.genres || []).map((g: any) => g.name);
-    }
-    if (!isPresent(data.releaseDate)) {
-        updatePayload.releaseDate = details.release_date;
-    }
-    if (!isPresent(data.director)) {
-        updatePayload.director = details.credits?.crew?.find((c: any) => c.job === 'Director')?.name;
-    }
-    if (!isPresent(data.tmdbId)) {
-        updatePayload.tmdbId = details.id;
-    }
-    if (!isPresent(data.videoLink) && !data.videoLocked) {
-        updatePayload.videoLink = pickYouTubeTrailer(details.videos?.results);
-    }
-    if (includeCast && !isPresent(data.cast)) {
-        updatePayload.cast = (details.credits?.cast || []).slice(0, 10).map((c: any) => ({
-            name: c.name,
-            profileUrl: posterUrl(c.profile_path, 'w185'),
-        }));
-    }
-    
-    if (Object.keys(updatePayload).length > 0) {
-        await doc.ref.update(updatePayload);
-        return { id: doc.id, updated: true, matched: { tmdbId: details.id, title: details.title } };
-    }
-    
-    return { id: doc.id, updated: false, skipped: true, matched: { tmdbId: details.id, title: details.title } };
-}
-
-async function handleEpisode(doc: admin.firestore.DocumentSnapshot, includeCast: boolean) {
-    const data = doc.data()!;
-    const showTitle = deriveShowName(data);
-
-    if (showTitle === 'Unknown Show') {
-        return { id: doc.id, matched: null };
-    }
-
-    const searchResults = await searchTV(showTitle);
-    const showRes = searchResults?.results?.[0];
-    if (!showRes?.id) {
-        return { id: doc.id, matched: null };
-    }
-    
-    const showDetails = await tvDetails(showRes.id);
-    if (!showDetails) {
-        return { id: doc.id, matched: { tmdbShowId: showRes.id, title: showRes.name } };
-    }
-
-    const userUid = doc.ref.parent.parent?.id;
-    if (!userUid) {
-        throw new Error('Could not determine user from doc path');
-    }
-    const showRef = db.collection(`users/${userUid}/shows`).doc(String(showDetails.id));
-    
-    // Create/merge show doc
-    const showUpdate: Record<string, any> = {};
-    const showDoc = await showRef.get();
-    const showData = showDoc.exists ? showDoc.data()! : {};
-
-    if (!isPresent(showData.posterUrl) && !showData.posterLocked) showUpdate.posterUrl = posterUrl(showDetails.poster_path, 'w500');
-    if (!isPresent(showData.backdropUrl) && !showData.backdropLocked) showUpdate.backdropUrl = backdropUrl(showDetails.backdrop_path, 'original');
-    if (!isPresent(showData.overview)) showUpdate.overview = showDetails.overview;
-    if (!isPresent(showData.genres)) showUpdate.genres = (showDetails.genres || []).map((g: any) => g.name);
-    if (!isPresent(showData.firstAirDate)) showUpdate.firstAirDate = showDetails.first_air_date;
-    if (!isPresent(showData.tmdbShowId)) showUpdate.tmdbShowId = showDetails.id;
-    if (!isPresent(showData.title)) showUpdate.title = showDetails.name;
-    
-    if (includeCast && !isPresent(showData.cast)) {
-        showUpdate.cast = (showDetails.aggregate_credits?.cast || []).slice(0, 10).map((c: any) => ({
-            name: c.name,
-            profileUrl: posterUrl(c.profile_path, 'w185'),
-        }));
-    }
-
-    if (Object.keys(showUpdate).length > 0) {
-        await showRef.set(showUpdate, { merge: true });
-    }
-
-    // Update episode doc
-    const episodeUpdate: Record<string, any> = {};
-    const currentShowData = {...showData, ...showUpdate};
-    if (!isPresent(data.posterUrl) && !data.posterLocked) episodeUpdate.posterUrl = currentShowData.posterUrl;
-    if (!isPresent(data.overview)) episodeUpdate.overview = currentShowData.overview;
-    if (!isPresent(data.showTitle)) episodeUpdate.showTitle = currentShowData.title;
-    if (!isPresent(data.showRef)) episodeUpdate.showRef = showRef.path;
-
-    if (Object.keys(episodeUpdate).length > 0) {
-        await doc.ref.update(episodeUpdate);
-        return { id: doc.id, updated: true, matched: { tmdbShowId: showDetails.id, title: showDetails.name } };
-    }
-
-    return { id: doc.id, updated: false, skipped: true, matched: { tmdbShowId: showDetails.id, title: showDetails.name } };
-}
-
-export default functions.https.onRequest(async (req, res) => {
-    if (req.method !== 'POST') {
-        res.status(405).send('Method Not Allowed');
-        return;
-    }
-
-    const {
-        collection: coll = 'media',
-        kind = 'any',
-        batchSize = 50,
-        dryRun = true,
-        startAfterId,
-        includeCast = false,
-    } = req.body;
-
-    const limit = Math.min(200, Math.max(1, batchSize));
-    const userUid = req.get('x-user-uid'); // Example of getting user context. In real app, use auth token.
-    if(!userUid){
-         res.status(401).json({ message: "User not authenticated"});
-         return;
-    }
-    const collectionPath = `users/${userUid}/${coll}`;
-
-
-    let query: admin.firestore.Query = db.collection(collectionPath).orderBy(admin.firestore.FieldPath.documentId()).limit(limit);
-
-    if (kind !== 'any') {
-        query = query.where('type', '==', kind);
-    }
-    if (startAfterId) {
-        const startAfterDoc = await db.collection(collectionPath).doc(startAfterId).get();
-        if (startAfterDoc.exists) {
-            query = query.startAfter(startAfterDoc);
+        // Auth (Firebase ID token from your Mac curl)
+        const header = req.headers.authorization || "";
+        if (!header.startsWith("Bearer ")) {
+          return res.status(401).json({
+            error: {
+              status: "UNAUTHENTICATED",
+              message: "Missing Authorization: Bearer <ID_TOKEN>",
+            },
+          });
         }
-    }
+        const idToken = header.substring(7);
+        const decoded = await admin.auth().verifyIdToken(idToken).catch(() => null);
+        if (!decoded?.uid) {
+          return res
+            .status(401)
+            .json({ error: { status: "UNAUTHENTICATED", message: "Invalid ID token" } });
+        }
+        const uid = decoded.uid;
 
-    const snapshot = await query.get();
-    let checked = 0;
-    let updated = 0;
-    let skippedExisting = 0;
-    const examples: any[] = [];
-    let nextStartAfterId: string | null = null;
-    
-    if (snapshot.empty) {
-        res.status(200).json({ message: "No documents found matching query." });
-        return;
-    }
+        const db = admin.firestore();
+        const q = req.query || {};
+        const b = (req.body || {}) as any;
 
-    for (const doc of snapshot.docs) {
-        checked++;
-        nextStartAfterId = doc.id;
+        const typeParam = (b.type || q.type || "all") as "movie" | "episode" | "all";
+        const limit = clamp(
+          parseInt(String(b.limit ?? q.limit ?? "500"), 10) || 500,
+          1,
+          1000
+        ); // docs per Firestore page
 
-        const data = doc.data();
-        let result: any;
-        
-        try {
-            if (data.type === 'movie') {
-                if (dryRun) {
-                    examples.push({ id: doc.id });
-                } else {
-                    result = await handleMovie(doc, includeCast);
-                }
-            } else if (data.type === 'episode') {
-                if (dryRun) {
-                    examples.push({ id: doc.id });
-                } else {
-                   result = await handleEpisode(doc, includeCast);
-                }
+        // HARD CAP at 50 because tmdbEnrich only accepts up to 50 items per call
+        const batchSize = clamp(
+          parseInt(String(b.batchSize ?? q.batchSize ?? "50"), 10) || 50,
+          1,
+          50
+        );
+
+        const processAll =
+          String(b.processAll ?? q.processAll ?? "false").toLowerCase() === "true";
+        const debug =
+          String(b.debug ?? q.debug ?? "false").toLowerCase() === "true";
+
+        let cursor = String(b.cursor ?? q.cursor ?? "");
+        const started = Date.now();
+        const SOFT_DEADLINE_MS = 470_000; // ~7.8 min, under 540s limit
+
+        let scanned = 0;
+        let candidates = 0;
+        let sentToEnrich = 0;
+        let enriched = 0;
+        let notFound = 0;
+        let errors = 0;
+        let skipped = 0;
+
+        const preview: any[] = [];
+
+        const coll = db.collection(`users/${uid}/media`);
+
+        while (true) {
+          let query = coll
+            .orderBy("updatedAt", "desc")
+            .orderBy(admin.firestore.FieldPath.documentId())
+            .limit(limit);
+
+          if (cursor) {
+            const [msStr, docId] = cursor.split("|");
+            const ms = Number(msStr);
+            if (Number.isFinite(ms) && docId) {
+              query = query.startAfter(
+                admin.firestore.Timestamp.fromMillis(ms),
+                docId
+              );
+            }
+          }
+
+          const snap = await query.get();
+          if (snap.empty) {
+            cursor = "";
+            break;
+          }
+
+          scanned += snap.size;
+
+          type Media = FirebaseFirestore.DocumentData & {
+            type?: string;
+            tmdbId?: any;
+            year?: number;
+            season?: number;
+            seasonNumber?: number;
+            episode?: number;
+            episodeNumber?: number;
+            normalizedTitle?: string | null;
+            title?: string | null;
+            filename?: string | null;
+            showRef?: string | null;
+            showTitle?: string | null;
+          };
+
+          // Build enrichable items for this page
+          const pageItems: Array<ItemMovie | ItemEpisode> = [];
+          for (const d of snap.docs) {
+            const m = (d.data() || {}) as Media;
+
+            if (typeParam !== "all" && m.type !== typeParam) continue;
+
+            const tmdbIdOk = typeof m.tmdbId === "number" && !Number.isNaN(m.tmdbId);
+            if (tmdbIdOk) {
+              skipped++;
+              continue;
             }
 
-            if(result) {
-                if (result.updated) updated++;
-                if (result.skipped) skippedExisting++;
-                examples.push({ id: doc.id, matched: result.matched });
-            }
-        } catch (error: any) {
-            functions.logger.error(`Failed to process doc ${doc.id}:`, error);
-            examples.push({ id: doc.id, error: error.message });
-        }
-    }
+            if (m.type === "movie") {
+              const title = (m.normalizedTitle || m.title || m.filename || "").trim();
+              if (!title) {
+                if (debug) preview.push({ mediaId: d.id, reason: "no_title" });
+                continue;
+              }
+              const year = isNum(m.year) ? m.year : undefined;
+              pageItems.push({ mediaId: d.id, type: "movie", title, year });
+            } else if (m.type === "episode") {
+              const season =
+                isNum(m.season) ? m.season : isNum(m.seasonNumber) ? m.seasonNumber : undefined;
+              const episode =
+                isNum(m.episode) ? m.episode : isNum(m.episodeNumber) ? m.episodeNumber : undefined;
 
-    res.status(200).json({
-        checked,
-        updated,
-        skippedExisting,
-        dryRun,
-        nextStartAfterId,
-        examples: examples.slice(0, 10),
+              let showTitle = (m.showTitle || null) as string | null;
+
+              // Try the referenced show doc if present
+              if (!showTitle && m.showRef && typeof m.showRef === "string") {
+                try {
+                  const showSnap = await db.doc(m.showRef).get();
+                  if (showSnap.exists) {
+                    const s = showSnap.data() || {};
+                    showTitle =
+                      s.normalizedTitle ||
+                      s.title ||
+                      s.filename ||
+                      s.name ||
+                      null;
+                  }
+                } catch {
+                  // ignore
+                }
+              }
+
+              // Last resort: infer from filename/title
+              if (!showTitle) {
+                const raw = (m.filename || m.title || "").trim();
+                showTitle = inferShowTitleFromFilename(raw);
+              }
+
+              if (showTitle && isNum(season) && isNum(episode)) {
+                pageItems.push({
+                  mediaId: d.id,
+                  type: "episode", // <-- fixed
+                  title: showTitle, // <-- fixed
+                  season,
+                  episode,
+                });
+              } else if (debug) {
+                preview.push({
+                  mediaId: d.id,
+                  reason: "insufficient_episode_fields",
+                  have: {
+                    showTitle,
+                    season,
+                    episode,
+                    filename: m.filename,
+                    title: m.title,
+                  },
+                });
+              }
+            }
+          }
+
+          candidates += pageItems.length;
+
+          // Enrich whole page in chunks of <= batchSize (and batchSize <= 50)
+          for (let i = 0; i < pageItems.length; i += batchSize) {
+            const chunk = pageItems.slice(i, i + batchSize);
+            if (!chunk.length) continue;
+            sentToEnrich += chunk.length;
+
+            const r = await tmdbEnrichFlow(uid, { items: chunk as any });
+            const results = (r?.results || []) as Array<{
+              mediaId: string;
+              status: "enriched" | "not_found" | "error";
+            }>;
+
+            for (const row of results) {
+              if (row.status === "enriched") enriched++;
+              else if (row.status === "not_found") notFound++;
+              else errors++;
+            }
+
+            // Soft deadline guard: if processing everything, bail out with a cursor to resume
+            if (Date.now() - started > SOFT_DEADLINE_MS && processAll) {
+              const last = snap.docs[snap.docs.length - 1];
+              const lastTs = last?.get("updatedAt");
+              const tsMs =
+                lastTs && typeof lastTs.toMillis === "function"
+                  ? lastTs.toMillis()
+                  : 0;
+              cursor = `${tsMs}|${last.id}`;
+              return res.status(200).json({
+                scanned,
+                candidates,
+                sentToEnrich,
+                enriched,
+                notFound,
+                skipped,
+                errors,
+                nextCursor: cursor,
+                ...(debug ? { preview } : {}),
+                info: "Soft deadline reached; resume with nextCursor.",
+              });
+            }
+          }
+
+          // Page cursor
+          const last = snap.docs[snap.docs.length - 1];
+          const lastTs = last?.get("updatedAt");
+          const tsMs =
+            lastTs && typeof lastTs.toMillis === "function" ? lastTs.toMillis() : 0;
+          cursor = snap.size < limit ? "" : `${tsMs}|${last.id}`;
+
+          if (!processAll) break;
+          if (!cursor) break;
+        }
+
+        return res.status(200).json({
+          scanned,
+          candidates,
+          sentToEnrich,
+          enriched,
+          notFound,
+          skipped,
+          errors,
+          nextCursor: cursor || null,
+          ...(debug ? { preview } : {}),
+        });
+      } catch (e: any) {
+        functions.logger.error("tmdbBackfillMissing fatal", e);
+        return res
+          .status(500)
+          .json({ error: { status: "INTERNAL", message: e?.message || "Internal error" } });
+      }
     });
-});
+  });

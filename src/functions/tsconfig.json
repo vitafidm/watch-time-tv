@@ -1,17 +1,16 @@
 {
   "compilerOptions": {
-    "module": "commonjs",
-    "noImplicitReturns": true,
-    "noUnusedLocals": true,
-    "outDir": "lib",
-    "sourceMap": true,
+    "target": "ES2020",
+    "module": "CommonJS",
+    "moduleResolution": "Node",
+    "lib": ["ES2020"],
     "strict": true,
-    "target": "es2022",
     "esModuleInterop": true,
-    "rootDir": "src"
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "rootDir": "src",
+    "outDir": "lib",
+    "sourceMap": false
   },
-  "compileOnSave": true,
-  "include": [
-    "src/**/*.ts"
-  ]
+  "include": ["src/**/*"]
 }

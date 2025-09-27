@@ -1,0 +1,95 @@
+"use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.playbackReportFlow = playbackReportFlow;
+// src/functions/src/flows/playback-report-flow.ts
+const admin = __importStar(require("firebase-admin"));
+const zod_1 = require("zod");
+const db = admin.firestore();
+const ReportSchema = zod_1.z.object({
+    mediaId: zod_1.z.string().min(1),
+    position: zod_1.z.number().min(0),
+    duration: zod_1.z.number().positive(),
+    finished: zod_1.z.boolean().optional(),
+});
+async function playbackReportFlow(uid, body) {
+    const parsed = ReportSchema.safeParse(body);
+    if (!parsed.success) {
+        const e = new Error(JSON.stringify(parsed.error.issues));
+        e.code = "invalid-argument";
+        throw e;
+    }
+    const { mediaId, position, duration, finished } = parsed.data;
+    const pbRef = db.doc(`users/${uid}/playback/${mediaId}`);
+    const mediaRef = db.doc(`users/${uid}/media/${mediaId}`);
+    const finishThreshold = Math.max(1, Math.floor(0.9 * duration)); // 90%
+    await db.runTransaction(async (tx) => {
+        // read both docs within the txn
+        await tx.get(pbRef);
+        const mediaSnap = await tx.get(mediaRef);
+        if (!mediaSnap.exists) {
+            const e = new Error("Media not found.");
+            e.code = "failed-precondition";
+            throw e;
+        }
+        const now = admin.firestore.FieldValue.serverTimestamp();
+        const isFinished = !!finished || position >= finishThreshold;
+        if (!isFinished) {
+            tx.set(pbRef, {
+                mediaId,
+                lastPosition: position,
+                duration,
+                lastPlayedAt: now,
+            }, { merge: true });
+            return;
+        }
+        const mediaData = mediaSnap.data() || {};
+        const lastFinishedAtMillis = typeof mediaData.lastFinishedAt?.toMillis === "function"
+            ? mediaData.lastFinishedAt.toMillis()
+            : 0;
+        const canIncrement = lastFinishedAtMillis < Date.now() - 60000;
+        if (canIncrement) {
+            tx.update(mediaRef, {
+                playCount: admin.firestore.FieldValue.increment(1),
+                lastFinishedAt: now,
+            });
+        }
+        else {
+            tx.update(mediaRef, { lastFinishedAt: now });
+        }
+        tx.delete(pbRef);
+    });
+    return { ok: true };
+}

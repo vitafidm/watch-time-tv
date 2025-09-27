@@ -1,4 +1,4 @@
-
+// src/functions/src/flows/playback-report-flow.ts
 import * as admin from "firebase-admin";
 import { z } from "zod";
 
@@ -8,7 +8,7 @@ const ReportSchema = z.object({
   mediaId: z.string().min(1),
   position: z.number().min(0),
   duration: z.number().positive(),
-  finished: z.boolean().optional()
+  finished: z.boolean().optional(),
 });
 
 export type ReportInput = z.infer<typeof ReportSchema>;
@@ -20,6 +20,7 @@ export async function playbackReportFlow(uid: string, body: unknown) {
     (e as any).code = "invalid-argument";
     throw e;
   }
+
   const { mediaId, position, duration, finished } = parsed.data;
 
   const pbRef = db.doc(`users/${uid}/playback/${mediaId}`);
@@ -27,7 +28,8 @@ export async function playbackReportFlow(uid: string, body: unknown) {
   const finishThreshold = Math.max(1, Math.floor(0.9 * duration)); // 90%
 
   await db.runTransaction(async (tx) => {
-    const pbSnap = await tx.get(pbRef);
+    // read both docs within the txn
+    await tx.get(pbRef);
     const mediaSnap = await tx.get(mediaRef);
 
     if (!mediaSnap.exists) {
@@ -46,7 +48,7 @@ export async function playbackReportFlow(uid: string, body: unknown) {
           mediaId,
           lastPosition: position,
           duration,
-          lastPlayedAt: now
+          lastPlayedAt: now,
         },
         { merge: true }
       );
@@ -54,14 +56,17 @@ export async function playbackReportFlow(uid: string, body: unknown) {
     }
 
     const mediaData = mediaSnap.data() || {};
-    const canIncrement =
-      !mediaData.lastFinishedAt ||
-      (mediaData.lastFinishedAt.toMillis?.() ?? 0) < Date.now() - 60_000;
+    const lastFinishedAtMillis =
+      typeof mediaData.lastFinishedAt?.toMillis === "function"
+        ? mediaData.lastFinishedAt.toMillis()
+        : 0;
+
+    const canIncrement = lastFinishedAtMillis < Date.now() - 60_000;
 
     if (canIncrement) {
       tx.update(mediaRef, {
         playCount: admin.firestore.FieldValue.increment(1),
-        lastFinishedAt: now
+        lastFinishedAt: now,
       });
     } else {
       tx.update(mediaRef, { lastFinishedAt: now });

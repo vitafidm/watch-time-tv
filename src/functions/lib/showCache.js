@@ -72,4 +72,3 @@ async function getShowFromCacheOrTMDB(tmdbShowId) {
     await initFirebase_1.db.doc(`shows/${tmdbShowId}`).set(newDoc);
     return newDoc;
 }
-//# sourceMappingURL=showCache.js.map

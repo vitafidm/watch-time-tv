@@ -193,4 +193,3 @@ const handler = async (req, res) => {
     });
 };
 exports.default = functions.https.onRequest(handler);
-//# sourceMappingURL=materializeUserShows.js.map

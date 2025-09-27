@@ -1,4 +1,3 @@
-
 import * as admin from "firebase-admin";
 import * as crypto from "crypto";
 import fetch from "node-fetch";
@@ -30,8 +29,11 @@ type CacheDoc = {
   backdropPath?: string | null;
   voteAverage?: number | null;
   language?: string | null;
-  cachedAt: FirebaseFirestore.Timestamp;
+  // allow either a concrete timestamp (read) or a server timestamp (write)
+  cachedAt: FirebaseFirestore.Timestamp | FirebaseFirestore.FieldValue;
 };
+
+type SearchHit = { id: number; tmdbType: "movie" | "tv" };
 
 function cacheKey(type: "movie"|"episode", title: string, year?: number) {
   const base = `${type === "episode" ? "tv" : "movie"}:${title.trim().toLowerCase()}:${year ?? ""}`;
@@ -43,7 +45,12 @@ function pickBestImage(path?: string | null): string | null {
   return `${IMG_BASE}${path}`;
 }
 
-async function tmdbSearch(apiKey: string, type: "movie"|"episode", title: string, year?: number) {
+async function tmdbSearch(
+  apiKey: string,
+  type: "movie"|"episode",
+  title: string,
+  year?: number
+): Promise<SearchHit | null> {
   const isTV = type === "episode";
   const endpoint = isTV ? "search/tv" : "search/movie";
   const url = new URL(`${TMDB_BASE}/${endpoint}`);
@@ -56,7 +63,7 @@ async function tmdbSearch(apiKey: string, type: "movie"|"episode", title: string
   const j = await r.json() as any;
   const first = (j?.results || [])[0];
   if (!first) return null;
-  return { id: first.id, tmdbType: isTV ? "tv" : "movie" as const };
+  return { id: first.id, tmdbType: isTV ? "tv" : "movie" };
 }
 
 async function tmdbDetails(apiKey: string, tmdbType: "movie"|"tv", id: number) {
@@ -119,13 +126,17 @@ export async function tmdbEnrichFlow(uid: string, rawBody: unknown) {
     }
 
     const key = cacheKey(it.type, it.title, it.year);
-    const cacheRef = db.doc(`users/${uid}/integrations_cache/tmdb/${key}`);
-    let cached = await cacheRef.get().then(s => s.exists ? s.data() as CacheDoc : null);
+
+    // Fixed: valid collection/doc path
+    const cacheRef = db.collection(`users/${uid}/integrations_cache_tmdb`).doc(key);
+
+    let cached: CacheDoc | null = await cacheRef.get().then(s => s.exists ? s.data() as CacheDoc : null);
 
     // 30-day cache TTL
-    const fresh = cached?.cachedAt?.toDate?.() && (Date.now() - cached.cachedAt.toDate().getTime() < 30 * 24 * 3600 * 1000);
-
-    let payload: any = null;
+    const fresh =
+      !!(cached as any)?.cachedAt &&
+      typeof (cached as any).cachedAt?.toDate === "function" &&
+      (Date.now() - (cached as any).cachedAt.toDate().getTime() < 30 * 24 * 3600 * 1000);
 
     try {
       if (!cached || !fresh) {
@@ -134,23 +145,23 @@ export async function tmdbEnrichFlow(uid: string, rawBody: unknown) {
           results.push({ mediaId: it.mediaId, status: "not_found" });
           continue;
         }
+
         const details = await tmdbDetails(apiKey, search.tmdbType, search.id);
         if (!details) {
           results.push({ mediaId: it.mediaId, status: "not_found" });
           continue;
         }
+
         const genres = (details.genres || []).map((g: any) => g.name).filter(Boolean);
         const overview = details.overview || null;
-        const posterUrl = pickBestImage(details.poster_path);
-        const backdropUrl = pickBestImage(details.backdrop_path);
         const releaseDate = details.release_date || null;
         const firstAirDate = details.first_air_date || null;
         const voteAverage = typeof details.vote_average === "number" ? details.vote_average : null;
         const language = details.original_language || null;
 
-        cached = {
+        const toWrite: CacheDoc = {
           tmdbId: details.id,
-          tmdbType: search.tmdbType,
+          tmdbType: search.tmdbType,                // <- "movie" | "tv"
           overview,
           genres,
           releaseDate,
@@ -159,20 +170,27 @@ export async function tmdbEnrichFlow(uid: string, rawBody: unknown) {
           backdropPath: details.backdrop_path ?? null,
           voteAverage,
           language,
-          cachedAt: admin.firestore.FieldValue.serverTimestamp() as any
+          cachedAt: admin.firestore.FieldValue.serverTimestamp()
         };
-        await cacheRef.set(cached, { merge: true });
+
+        await cacheRef.set(toWrite, { merge: true });
+        cached = toWrite;
       }
 
-      payload = {
+      if (!cached) {
+        results.push({ mediaId: it.mediaId, status: "error", message: "cache unavailable" });
+        continue;
+      }
+
+      const payload = {
         tmdbId: cached.tmdbId,
         tmdbType: cached.tmdbType,
         overview: cached.overview ?? media.overview ?? null,
         genres: cached.genres ?? media.genres ?? null,
         releaseDate: cached.releaseDate ?? media.releaseDate ?? null,
         firstAirDate: cached.firstAirDate ?? media.firstAirDate ?? null,
-        posterUrl: pickBestImage((cached as any).posterPath) ?? media.posterUrl ?? null,
-        backdropUrl: pickBestImage((cached as any).backdropPath) ?? media.backdropUrl ?? null,
+        posterUrl: pickBestImage(cached.posterPath) ?? media.posterUrl ?? null,
+        backdropUrl: pickBestImage(cached.backdropPath) ?? media.backdropUrl ?? null,
         voteAverage: cached.voteAverage ?? media.voteAverage ?? null,
         language: cached.language ?? media.language ?? null,
         updatedAt: admin.firestore.FieldValue.serverTimestamp()
@@ -190,12 +208,9 @@ export async function tmdbEnrichFlow(uid: string, rawBody: unknown) {
 
 // Scheduled sweep for missing metadata
 export async function tmdbBackfillSweep() {
-  // WARNING: In a real multi-tenant, you'd list users from Auth or maintain a registry.
-  // Here we rely on a lightweight collection group query to find media missing tmdbId.
-  // Then group by owner uid via doc path parsing.
   const snap = await db.collectionGroup("media")
     .where("tmdbId", "==", null)
-    .limit(200) // small batch per run
+    .limit(200)
     .get();
 
   const byOwner: Record<string, Array<{ mediaId: string; type: "movie"|"episode"; title: string; year?: number }>> = {};
@@ -207,17 +222,16 @@ export async function tmdbBackfillSweep() {
     const m = d.data() as any;
     if (!uid || !m) continue;
     const type = (m.type === "episode" ? "episode" : "movie") as "movie"|"episode";
-    const title = m.title || m.filename || "unknown";
+    const title = m.normalizedTitle || m.title || m.filename || "unknown";
     const year = m.year;
     (byOwner[uid] ||= []).push({ mediaId: d.id, type, title, year });
   }
 
   for (const [uid, items] of Object.entries(byOwner)) {
-    // Respect per-user rate limiting by spacing calls
     const chunk = items.slice(0, 50);
     try {
       await tmdbEnrichFlow(uid, { items: chunk });
-      await new Promise(r => setTimeout(r, 1000)); // soft delay between users
+      await new Promise(r => setTimeout(r, 1000));
     } catch (e: any) {
        console.error(`Skipping backfill for user ${uid} due to error: ${e.message}`);
     }

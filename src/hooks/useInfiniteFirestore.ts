@@ -45,7 +45,7 @@ export function useInfiniteFirestore<T>({
     setLoading(true);
   }, []);
 
-  const fetchNextPage = useCallback(async () => {
+  const fetchNextPage = useCallback(async (isReset = false) => {
     if (!collectionPath) return;
 
     setLoading(true);
@@ -58,7 +58,7 @@ export function useInfiniteFirestore<T>({
         });
       }
       constraints.push(fbOrderBy(orderBy[0], orderBy[1]));
-      if (lastDoc) {
+      if (lastDoc && !isReset) {
         constraints.push(startAfter(lastDoc));
       }
       constraints.push(fbLimit(pageSize));
@@ -68,13 +68,18 @@ export function useInfiniteFirestore<T>({
 
       if (snapshot.empty) {
         setHasMore(false);
+         if (isReset) setItems([]);
       } else {
         const newItems = snapshot.docs.map(map);
-        setItems((prevItems) => {
-            const existingIds = new Set(prevItems.map((item: any) => item.id));
-            const uniqueNewItems = newItems.filter((item: any) => !existingIds.has(item.id));
-            return [...prevItems, ...uniqueNewItems];
-        });
+        if (isReset) {
+          setItems(newItems);
+        } else {
+            setItems((prevItems) => {
+                const existingIds = new Set(prevItems.map((item: any) => item.id));
+                const uniqueNewItems = newItems.filter((item: any) => !existingIds.has(item.id));
+                return [...prevItems, ...uniqueNewItems];
+            });
+        }
         setLastDoc(snapshot.docs[snapshot.docs.length - 1]);
         setHasMore(snapshot.docs.length === pageSize);
       }
@@ -84,15 +89,22 @@ export function useInfiniteFirestore<T>({
       setLoading(false);
     }
   }, [collectionPath, where, orderBy, pageSize, map, lastDoc]);
+
+  const resetAndFetch = useCallback(async () => {
+    setItems([]);
+    setLastDoc(null);
+    setHasMore(true);
+    await fetchNextPage(true);
+  }, [fetchNextPage]);
   
   useEffect(() => {
     // This effect runs only when dependencies change, effectively resetting and loading the first page.
     reset();
     if(collectionPath) {
-        fetchNextPage();
+        fetchNextPage(true);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [collectionPath]); // We only want to reset on collectionPath change
+  }, [collectionPath]);
 
   const attachSentinel = useCallback((el: HTMLElement | null) => {
     if (loading) return;
@@ -116,5 +128,5 @@ export function useInfiniteFirestore<T>({
     };
   }, []);
 
-  return { items, loading, hasMore, attachSentinel, reset };
+  return { items, loading, hasMore, attachSentinel, reset, resetAndFetch };
 }

@@ -53,4 +53,3 @@ function pickYouTubeTrailer(videos) {
     const chosenTrailer = officialTrailer || trailers[0];
     return `https://www.youtube.com/watch?v=${chosenTrailer.key}`;
 }
-//# sourceMappingURL=titleHelpers.js.map

@@ -39,4 +39,3 @@ if (admin.apps.length === 0) {
     admin.initializeApp();
 }
 exports.db = admin.firestore();
-//# sourceMappingURL=initFirebase.js.map

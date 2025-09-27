@@ -1,32 +1,21 @@
-
 import * as crypto from 'crypto';
 import * as admin from 'firebase-admin';
 import { z } from 'zod';
-import { normalizeTitle } from '../src/lib/normalizeTitle';
-import { parseEpisodeFromName } from '../src/lib/episodeParser';
+import { normalizeTitle } from '../lib/normalizeTitle';
+import { parseEpisodeFromName } from '../lib/episodeParser';
 
 const db = admin.firestore();
 
-// -------- NEW: robust coercion to Firestore Timestamp --------
 function toTimestamp(v: unknown): admin.firestore.Timestamp {
   try {
     if (v == null) return admin.firestore.Timestamp.now();
-    // already a Firestore Timestamp
-    if (v instanceof (admin.firestore as any).Timestamp) {
-      return v as admin.firestore.Timestamp;
-    }
-    if (typeof v === 'number') {
-      // treat as millis since epoch
-      return admin.firestore.Timestamp.fromMillis(v);
-    }
+    if (v instanceof (admin.firestore as any).Timestamp) return v as admin.firestore.Timestamp;
+    if (typeof v === 'number') return admin.firestore.Timestamp.fromMillis(v);
     if (typeof v === 'string') {
-      // ISO 8601, or any Date-parsable string
       const d = new Date(v);
       if (!isNaN(d.getTime())) return admin.firestore.Timestamp.fromDate(d);
-      // fallback
       return admin.firestore.Timestamp.now();
     }
-    // objects that expose .toDate()
     // @ts-ignore
     if (typeof v?.toDate === 'function') {
       // @ts-ignore
@@ -35,29 +24,63 @@ function toTimestamp(v: unknown): admin.firestore.Timestamp {
         return admin.firestore.Timestamp.fromDate(d);
       }
     }
-  } catch { /* noop */ }
+  } catch {}
   return admin.firestore.Timestamp.now();
 }
 
-// Zod schema for a single media item in the ingest payload.
+// ---------- NEW: lightweight scoring (no TMDB calls) ----------
+function scoreMovie({
+  normalizedTitle,
+  year,
+  filename,
+}: { normalizedTitle: string | null; year?: number | null; filename: string }) {
+  // crude heuristic:
+  // base 0.5 if we have a normalized title, +0.3 if we have a 4-digit plausible year in the name or provided,
+  // +0.15 if filename had a (YYYY) pattern, ceil at 0.95
+  let score = 0;
+  if (normalizedTitle && normalizedTitle.length >= 3) score += 0.5;
+
+  const yearInName = /\b(19|20)\d{2}\b/.test(filename);
+  if (year || yearInName) score += 0.3;
+
+  const parenYear = /\((19|20)\d{2}\)/.test(filename);
+  if (parenYear) score += 0.15;
+
+  return Math.min(0.95, score);
+}
+
+function scoreEpisode({
+  season,
+  episode,
+  filename,
+}: { season: number | null; episode: number | null; filename: string }) {
+  // 0.95 if S/E are present and look sane; 0.6 if only one is present
+  if (Number.isInteger(season) && Number.isInteger(episode)) return 0.95;
+  if (Number.isInteger(season) || Number.isInteger(episode)) return 0.6;
+  // fallback: detect token in filename
+  if (/s\d{1,2}e\d{1,3}/i.test(filename)) return 0.8;
+  return 0.25;
+}
+
+// Zod schemas
 const MediaItemSchema = z.object({
   mediaId: z.string().min(1).optional(),
-  title: z.string().min(1, { message: 'Title cannot be empty' }),
-  filename: z.string().min(1, { message: 'Filename cannot be empty' }),
-  path: z.string().min(1, { message: 'Path cannot be empty' }),
+  title: z.string().min(1),
+  filename: z.string().min(1),
+  path: z.string().min(1),
   type: z.enum(['movie', 'episode']),
   season: z.number().int().nonnegative().optional(),
   episode: z.number().int().nonnegative().optional(),
   year: z.number().int().optional(),
-  size: z.number().positive({ message: 'Size must be a positive number' }),
-  duration: z.number().positive({ message: 'Duration must be a positive number' }),
+  size: z.number().positive(),
+  duration: z.number().positive(),
   codec: z.string().optional(),
   posterUrl: z.string().url().optional(),
   backdropUrl: z.string().url().optional(),
   tmdbId: z.number().int().optional(),
-  addedAt: z.union([z.string().datetime({ message: 'Invalid ISO 8601 datetime format' }), z.number()]).optional(),
-  
-  // New optional fields (server-computed)
+  addedAt: z.union([z.string().datetime(), z.number()]).optional(),
+
+  // helper fields (server-computed)
   librarySection: z.enum(['movies','tv']).optional(),
   normalizedTitle: z.string().nullable().optional(),
   episodeNumber: z.number().int().nullable().optional(),
@@ -66,19 +89,14 @@ const MediaItemSchema = z.object({
   manualOverride: z.boolean().optional(),
 });
 
-// Zod schema for the entire agent ingest request body.
 const AgentIngestBodySchema = z.object({
-  items: z.array(MediaItemSchema).max(200, { message: 'Cannot process more than 200 items per request' })
+  items: z.array(MediaItemSchema).max(200)
 });
 
-// Zod schema for the flow input, combining API key and body.
 const AgentIngestInputSchema = AgentIngestBodySchema.extend({
-  apiKey: z.string().min(1, { message: 'API key is required' }),
+  apiKey: z.string().min(1),
 });
 
-/**
- * Compares two hex strings in constant time to prevent timing attacks.
- */
 function timingSafeHexEquals(aHex: string, bHex: string): boolean {
   const a = Buffer.from(aHex, 'hex');
   const b = Buffer.from(bHex, 'hex');
@@ -89,9 +107,6 @@ function timingSafeHexEquals(aHex: string, bHex: string): boolean {
   return crypto.timingSafeEqual(a, b);
 }
 
-/**
- * Computes the scrypt hash of a key with a given salt.
- */
 function scryptHex(key: string, salt: string, length = 64): Promise<string> {
   return new Promise((resolve, reject) => {
     crypto.scrypt(key, salt, length, (err, derivedKey) => {
@@ -101,9 +116,6 @@ function scryptHex(key: string, salt: string, length = 64): Promise<string> {
   });
 }
 
-/**
- * Creates a stable, deterministic SHA-256 hash for a media item.
- */
 function stableMediaId(serverId: string, path: string): string {
   const h = crypto.createHash('sha256');
   h.update(`${serverId}:${path}`);
@@ -111,18 +123,14 @@ function stableMediaId(serverId: string, path: string): string {
 }
 
 function deriveLibrarySection(path: string): 'movies' | 'tv' | undefined {
-    const segments = path.toLowerCase().split(/[\\/]/);
-    if (segments.includes('movies')) return 'movies';
-    if (segments.includes('tv')) return 'tv';
-    return undefined;
+  const segments = path.toLowerCase().split(/[\\/]/);
+  if (segments.includes('movies')) return 'movies';
+  if (segments.includes('tv')) return 'tv';
+  return undefined;
 }
-
 
 export type IngestResult = { mediaId?: string; status: 'upserted' | 'error'; message?: string; path?: string };
 
-/**
- * Main flow for handling agent media ingest requests.
- */
 export async function agentIngestFlow(rawInput: unknown): Promise<{ results: IngestResult[]; ownerUid: string | null; serverId: string | null }> {
   const parsedInput = AgentIngestInputSchema.safeParse(rawInput);
   if (!parsedInput.success) {
@@ -132,10 +140,7 @@ export async function agentIngestFlow(rawInput: unknown): Promise<{ results: Ing
   }
 
   const { apiKey, items } = parsedInput.data;
-
-  if (items.length === 0) {
-    return { results: [], ownerUid: null, serverId: null };
-  }
+  if (items.length === 0) return { results: [], ownerUid: null, serverId: null };
 
   const serversSnap = await db.collectionGroup('servers').where('status', '==', 'linked').get();
 
@@ -162,7 +167,7 @@ export async function agentIngestFlow(rawInput: unknown): Promise<{ results: Ing
     throw err;
   }
 
-  matchedRef.update({ lastSeen: admin.firestore.FieldValue.serverTimestamp() }).catch(e => console.error(`Failed to update lastSeen for ${serverId}`, e));
+  matchedRef.update({ lastSeen: admin.firestore.FieldValue.serverTimestamp() }).catch(() => {});
 
   const BATCH_SIZE = 450;
   const results: IngestResult[] = [];
@@ -175,7 +180,6 @@ export async function agentIngestFlow(rawInput: unknown): Promise<{ results: Ing
 
       const mid = item.mediaId || stableMediaId(serverId, item.path);
       const docRef = db.doc(`users/${ownerUid}/media/${mid}`);
-      
       const existingDoc = await docRef.get().then(s => s.exists ? s.data() : null);
 
       const dataToUpsert: any = {
@@ -184,49 +188,69 @@ export async function agentIngestFlow(rawInput: unknown): Promise<{ results: Ing
         serverId,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       };
-      
+
       if (typeof item.addedAt !== 'undefined') {
         dataToUpsert.addedAt = toTimestamp(item.addedAt);
       }
 
-      // --- NEW FIELD DERIVATION ---
       const recomputeHelpers = !existingDoc || existingDoc.type !== item.type;
-      
+
+      // librarySection
       if (recomputeHelpers || existingDoc.librarySection === undefined) {
-          dataToUpsert.librarySection = deriveLibrarySection(item.path);
+        dataToUpsert.librarySection = deriveLibrarySection(item.path);
       }
 
       if (item.type === 'episode') {
+        // season/episodeNumber parse
         if (recomputeHelpers || existingDoc.season === undefined || existingDoc.episodeNumber === undefined) {
-            const parsed = parseEpisodeFromName(item.filename);
-            dataToUpsert.season = parsed.season;
-            dataToUpsert.episodeNumber = parsed.episodeNumber;
+          const parsed = parseEpisodeFromName(item.filename);
+          dataToUpsert.season = parsed.season;
+          dataToUpsert.episodeNumber = parsed.episodeNumber;
         }
         if (recomputeHelpers || existingDoc.normalizedTitle === undefined) {
-            dataToUpsert.normalizedTitle = null;
+          dataToUpsert.normalizedTitle = null; // episodes keep null here
         }
-      } else if (item.type === 'movie') {
+
+        // scoring (only if not set already)
+        if (existingDoc?.matchConfidence === undefined || existingDoc?.matchMethod === undefined) {
+          const s = scoreEpisode({
+            season: dataToUpsert.season ?? null,
+            episode: dataToUpsert.episodeNumber ?? null,
+            filename: item.filename,
+          });
+          dataToUpsert.matchConfidence = s;
+          dataToUpsert.matchMethod = (Number.isInteger(dataToUpsert.season) && Number.isInteger(dataToUpsert.episodeNumber)) ? 'show+S/E' : null;
+        }
+
+      } else {
+        // movie
         if (recomputeHelpers || existingDoc.normalizedTitle === undefined) {
-           dataToUpsert.normalizedTitle = normalizeTitle({ ...item });
+          dataToUpsert.normalizedTitle = normalizeTitle({ filename: item.filename, path: item.path, type: 'movie', year: item.year ?? null });
         }
         if (recomputeHelpers || existingDoc.season === undefined || existingDoc.episodeNumber === undefined) {
-            dataToUpsert.season = null;
-            dataToUpsert.episodeNumber = null;
+          dataToUpsert.season = null;
+          dataToUpsert.episodeNumber = null;
+        }
+
+        // scoring (only if not set already)
+        if (existingDoc?.matchConfidence === undefined || existingDoc?.matchMethod === undefined) {
+          const s = scoreMovie({
+            normalizedTitle: dataToUpsert.normalizedTitle ?? null,
+            year: item.year ?? null,
+            filename: item.filename,
+          });
+          dataToUpsert.matchConfidence = s || null;
+          dataToUpsert.matchMethod = dataToUpsert.normalizedTitle ? 'title+year' : null;
         }
       }
-      
-      if (existingDoc?.matchConfidence === undefined) dataToUpsert.matchConfidence = null;
-      if (existingDoc?.matchMethod === undefined) dataToUpsert.matchMethod = null;
+
       if (existingDoc?.manualOverride === undefined) dataToUpsert.manualOverride = false;
-      
-      // --- END NEW FIELD DERIVATION ---
+      if (existingDoc?.matchConfidence === undefined && dataToUpsert.matchConfidence === undefined) dataToUpsert.matchConfidence = null;
+      if (existingDoc?.matchMethod === undefined && dataToUpsert.matchMethod === undefined) dataToUpsert.matchMethod = null;
 
       batch.set(docRef, dataToUpsert, { merge: true });
       opsInBatch++;
       results.push({ mediaId: mid, status: 'upserted', path: item.path });
-      
-      console.log(`Ingest: mediaId=${mid} type=${item.type} lib=${dataToUpsert.librarySection || '-'} normTitle=${dataToUpsert.normalizedTitle || '-'} S=${dataToUpsert.season ?? '-'} E=${dataToUpsert.episodeNumber ?? '-'}`);
-
 
       if (opsInBatch >= BATCH_SIZE) {
         await batch.commit();
@@ -234,14 +258,10 @@ export async function agentIngestFlow(rawInput: unknown): Promise<{ results: Ing
         opsInBatch = 0;
       }
     } catch (e: any) {
-      const message = e instanceof z.ZodError ? JSON.stringify(e.issues) : (e.message || 'Unknown processing error');
-      results.push({ status: 'error', message, path: (item as any)?.path });
+      results.push({ status: 'error', message: e?.message || 'Unknown processing error', path: (item as any)?.path });
     }
   }
 
-  if (opsInBatch > 0) {
-    await batch.commit();
-  }
-
+  if (opsInBatch > 0) await batch.commit();
   return { results, ownerUid, serverId };
 }

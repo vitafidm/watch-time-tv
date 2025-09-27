@@ -2,8 +2,12 @@
   "name": "private-cinema-functions",
   "version": "1.0.0",
   "description": "Cloud Functions for Private Cinema",
-  "main": "lib/index.js",
   "private": true,
+  "type": "commonjs",
+  "main": "lib/index.js",
+  "engines": {
+    "node": "20"
+  },
   "dependencies": {
     "cors": "^2.8.5",
     "firebase-admin": "^12.3.1",
@@ -17,6 +21,7 @@
     "typescript": "^5.4.5"
   },
   "scripts": {
-    "build": "tsc"
+    "clean": "rm -rf lib",
+    "build": "tsc -p ."
   }
 }

@@ -109,4 +109,3 @@ function posterUrl(path, size = 'w500') {
 function backdropUrl(path, size = 'w780') {
     return path ? `${IMG_BASE_URL}${size}${path}` : null;
 }
-//# sourceMappingURL=tmdbClient.js.map

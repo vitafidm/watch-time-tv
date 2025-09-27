@@ -4,7 +4,7 @@
 import { useAuthUser } from "@/hooks/useAuthUser";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Film, Sparkles, RefreshCw } from "lucide-react";
+import { Film, RefreshCw } from "lucide-react";
 import type { MediaDoc } from "@/lib/db.types";
 import { useMemo, useState, useCallback, useRef, useEffect } from "react";
 import Image from "next/image";
@@ -12,15 +12,24 @@ import Link from "next/link";
 import { WatchlistButton } from "@/components/watchlist-button";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
-import { ENV } from "@/lib/env";
 import { useInfiniteFirestore } from "@/hooks/useInfiniteFirestore";
-import { cleanTitleFromFilename } from "@/lib/cleanTitle";
 import { MediaEditButton } from "@/components/MediaEditButton";
 import { MediaEditModal, type MediaEditModalItem } from "@/components/MediaEditModal";
 
+function getInitials(title: string = ""): string {
+  return title
+    .split(' ')
+    .map(word => word[0])
+    .filter(char => /[a-zA-Z0-9]/.test(char))
+    .slice(0, 2)
+    .join('')
+    .toUpperCase();
+}
+
+
 // A version of MediaCard that works with MediaDoc from Firestore
 function MediaDocCard({ item, onEdit }: { item: MediaDoc & {id: string}, onEdit: () => void; }) {
-    const displayTitle = (item as any).displayTitle || item.title || cleanTitleFromFilename(item.filename || "");
+    const displayTitle = item.normalizedTitle || item.title;
 
     const mediaItem = useMemo(() => {
         // Safely determine the release date, handling both Timestamp objects and ISO strings.
@@ -36,33 +45,37 @@ function MediaDocCard({ item, onEdit }: { item: MediaDoc & {id: string}, onEdit:
             }
         }
         
-        const poster = item.posterUrl || ((item as any).poster_path ? `https://image.tmdb.org/t/p/w500${(item as any).poster_path}` : `https://picsum.photos/seed/${item.id}/500/750`);
-
         return {
             id: item.tmdbId || Math.random(), // Fallback id
-            title: item.title,
+            title: displayTitle,
             overview: (item as any).overview || '',
-            poster_path: poster,
+            poster_path: item.posterUrl || '', // Prioritize posterUrl, fallback handled in JSX
             backdrop_path: item.backdropUrl || `https://picsum.photos/1280/720?random=${item.mediaId}`,
             release_date: releaseDate,
             vote_average: (item as any).vote_average || 0,
             genres: (item as any).genres || [],
             media_type: item.type,
         };
-    }, [item]);
+    }, [item, displayTitle]);
     
     return (
         <div className="group block">
-            <div className="relative aspect-[2/3] w-full overflow-hidden rounded-lg shadow-lg transition-all duration-300 group-hover:scale-105 group-hover:shadow-primary/40">
+            <div className="relative aspect-[2/3] w-full overflow-hidden rounded-lg shadow-lg transition-all duration-300 group-hover:scale-105 group-hover:shadow-primary/40 bg-muted">
                 <Link href={`/media/${item.mediaId}`} prefetch={false} className="block w-full h-full">
-                    <Image
-                        src={mediaItem.poster_path}
-                        alt={mediaItem.title}
-                        width={500}
-                        height={750}
-                        className="object-cover bg-muted"
-                        data-ai-hint={`${item.type} poster`}
-                    />
+                    {mediaItem.poster_path ? (
+                        <Image
+                            src={mediaItem.poster_path}
+                            alt={mediaItem.title}
+                            width={500}
+                            height={750}
+                            className="object-cover"
+                            data-ai-hint={`${item.type} poster`}
+                        />
+                    ) : (
+                         <div className="w-full h-full flex items-center justify-center bg-secondary">
+                            <span className="font-headline text-4xl text-muted-foreground">{getInitials(displayTitle)}</span>
+                        </div>
+                    )}
                 </Link>
                 <div className="absolute top-2 right-11 z-10 opacity-0 transition-opacity duration-300 group-hover:opacity-100">
                     <WatchlistButton item={mediaItem} asIcon />
@@ -70,7 +83,7 @@ function MediaDocCard({ item, onEdit }: { item: MediaDoc & {id: string}, onEdit:
                 <MediaEditButton onOpen={onEdit} />
             </div>
             <div className="space-y-1 mt-2">
-            <h3 className="font-headline text-base font-bold text-foreground truncate">
+            <h3 className="font-headline text-base font-bold text-foreground truncate" title={displayTitle}>
                 {displayTitle}
             </h3>
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -83,7 +96,11 @@ function MediaDocCard({ item, onEdit }: { item: MediaDoc & {id: string}, onEdit:
 
 function MovieLibrary() {
   const { user } = useAuthUser();
-  const { items: fetchedMovies, loading, hasMore, attachSentinel, reset } = useInfiniteFirestore<MediaDoc & {id: string}>({
+  const { toast } = useToast();
+  
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
+  const { items: fetchedMovies, loading, hasMore, attachSentinel, resetAndFetch } = useInfiniteFirestore<MediaDoc & {id: string}>({
     collectionPath: user ? `users/${user.uid}/media` : undefined,
     where: [['type', '==', 'movie']],
     orderBy: ['addedAt', 'desc'],
@@ -96,8 +113,7 @@ function MovieLibrary() {
     setMovies(fetchedMovies);
   }, [fetchedMovies]);
 
-  const { toast } = useToast();
-  const [isEnriching, setIsEnriching] = useState(false);
+  
   const [editingItem, setEditingItem] = useState<MediaEditModalItem | null>(null);
 
   const sentinelRef = useRef(null);
@@ -111,6 +127,7 @@ function MovieLibrary() {
         kind: 'movie',
         current: {
             title: item.title,
+            normalizedTitle: item.normalizedTitle,
             posterUrl: item.posterUrl,
         }
     });
@@ -119,49 +136,21 @@ function MovieLibrary() {
   const handleApplied = (id: string, patch: Partial<MediaDoc>) => {
     setMovies(prev => prev.map(it => it.id === id ? { ...it, ...patch } : it));
   };
-
-  const handleEnrich = useCallback(async () => {
-    if (!user || !movies || movies.length === 0 || !ENV.TMDB_ENRICH_URL) {
-        toast({ title: "Error", description: "Cannot enrich. User not signed in, library is empty, or enrich URL is not configured.", variant: "destructive" });
-        return;
-    }
-    setIsEnriching(true);
-    toast({ title: "Starting Enrichment", description: "Fetching metadata from TMDB for your movie library..." });
-
+  
+  const handleRefresh = async () => {
+    if (!resetAndFetch) return;
+    setIsRefreshing(true);
     try {
-        const idToken = await user.getIdToken();
-        const itemsToEnrich = movies.map(m => ({
-            mediaId: m.id,
-            type: m.type,
-            title: m.title,
-            year: m.year,
-        }));
-        
-        const response = await fetch(ENV.TMDB_ENRICH_URL, {
-            method: "POST",
-            headers: {
-                "Authorization": `Bearer ${idToken}`,
-                "Content-Type": "application/json",
-            },
-            body: JSON.stringify({ items: itemsToEnrich }),
-        });
-
-        const result = await response.json();
-        if (!response.ok) {
-            throw new Error(result?.error?.message || "Failed to enrich metadata.");
-        }
-
-        const enrichedCount = result.results?.filter((r: any) => r.status === 'enriched').length || 0;
-        toast({ title: "Enrichment Complete", description: `Successfully updated metadata for ${enrichedCount} movies.` });
-        if (enrichedCount > 0) reset();
-
-    } catch (err: any) {
-        console.error("Enrichment failed:", err);
-        toast({ title: "Enrichment Failed", description: err.message, variant: "destructive"});
+      await resetAndFetch();
+      toast({ title: "Library refreshed" });
+    } catch (error: any) {
+      console.error("Failed to refresh library:", error);
+      toast({ title: "Refresh failed", description: error.message, variant: "destructive" });
     } finally {
-        setIsEnriching(false);
+      setIsRefreshing(false);
     }
-  }, [user, movies, toast, reset]);
+  };
+
 
   const showInitialLoading = loading && movies.length === 0;
 
@@ -172,9 +161,9 @@ function MovieLibrary() {
             <Film className="h-8 w-8 text-primary" />
             <h1 className="font-headline text-4xl font-bold tracking-tight">Movie Library</h1>
         </div>
-        <Button onClick={handleEnrich} disabled={isEnriching || movies.length === 0}>
-            {isEnriching ? <RefreshCw className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
-            {isEnriching ? 'Enriching...' : 'Enrich Metadata'}
+        <Button onClick={handleRefresh} disabled={isRefreshing || loading}>
+            <RefreshCw className={`mr-2 h-4 w-4 ${isRefreshing ? 'animate-spin' : ''}`} />
+            {isRefreshing ? 'Refreshing...' : 'Refresh'}
         </Button>
       </div>
 
