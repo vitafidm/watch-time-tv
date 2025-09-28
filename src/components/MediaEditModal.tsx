@@ -202,36 +202,43 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
     try {
       const idToken = await user.getIdToken();
       
+      let functionName;
+      let payload;
+
       if (item.kind === 'show') {
-        await callFunction('tmdbFixShow', {
+        functionName = 'tmdbFixShow';
+        payload = {
           uid: user.uid,
           oldShowId: Number(item.id),
           newShowId: selectedMatch.tmdbId,
           keepOverrides: true,
-        }, idToken);
-        toast({ title: "Show Match Updated", description: `Successfully re-matched with "${selectedMatch.title}". Refreshing list...` });
-        router.refresh();
+        };
       } else {
-         const payload: any = {
+        functionName = 'tmdbFixMatch';
+        payload = {
           collection: item.collectionPath,
           docId: item.id,
-          kind: isMovie ? 'movie' : 'tv', // 'episode' maps to 'tv' on the backend
+          kind: item.kind === 'movie' ? 'movie' : 'tv', // Ensure correct kind for backend
           tmdbId: selectedMatch.tmdbId,
           updateDisplayTitle,
           includeCast: true,
         };
-        await callFunction('tmdbFixMatch', payload, idToken);
-        toast({ title: "Match Updated", description: `Successfully matched with "${selectedMatch.title}".` });
-        const patch: Partial<any> = {};
-        if (updateDisplayTitle) {
-          const newTitle = selectedMatch.title;
-          patch.displayTitle = newTitle;
-          patch.normalizedTitle = newTitle;
-          if (item.kind === 'show') { 
-            patch.title = newTitle;
+      }
+
+      await callFunction(functionName, payload, idToken);
+      
+      toast({ title: "Match Updated", description: `Successfully re-matched with "${selectedMatch.title}".` });
+
+      if (item.kind !== 'show') {
+          const patch: Partial<any> = {};
+          if (updateDisplayTitle) {
+              const newTitle = selectedMatch.title;
+              patch.displayTitle = newTitle;
+              patch.normalizedTitle = newTitle;
           }
-        }
-        onApplied?.(item.id, patch);
+          onApplied?.(item.id, patch);
+      } else {
+        router.refresh();
       }
 
       onClose();
@@ -271,7 +278,11 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
       toast({ title: "Artwork Updated", description: `The ${type} has been set.` });
       onApplied?.(item.id, patch);
     } catch (err: any) {
-      toast({ title: "Save Failed", description: err.message, variant: 'destructive' });
+      toast({
+        title: 'Save Failed',
+        description: err.message,
+        variant: 'destructive',
+      });
     } finally {
       setArtworkSaving(null);
     }
@@ -285,7 +296,8 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
         <DialogHeader>
           <DialogTitle>Edit Media</DialogTitle>
           <DialogDescription>
-            Fix incorrect matches or manually set artwork for "{displayTitleText}".
+            Fix incorrect matches or manually set artwork for "{displayTitleText}
+            ".
           </DialogDescription>
         </DialogHeader>
 
@@ -296,10 +308,15 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
               <Input
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder={isMovie ? "Search movie title..." : "Search show title..."}
+                placeholder={
+                  isMovie ? 'Search movie title...' : 'Search show title...'
+                }
                 disabled={isSearching || isFixing}
               />
-              <Button type="submit" disabled={isSearching || isFixing || !searchQuery}>
+              <Button
+                type="submit"
+                disabled={isSearching || isFixing || !searchQuery}
+              >
                 {isSearching ? <Loader2 className="animate-spin" /> : <Search />}
               </Button>
             </form>
@@ -307,33 +324,49 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
             <ScrollArea className="h-[360px] rounded-md border">
               <div className="p-2 space-y-1">
                 {isSearching && searchResults.length === 0 ? (
-                  <div className="flex justify-center py-4"><Loader2 className="animate-spin text-muted-foreground" /></div>
+                  <div className="flex justify-center py-4">
+                    <Loader2 className="animate-spin text-muted-foreground" />
+                  </div>
                 ) : searchResults.length > 0 ? (
-                  searchResults.map(result => (
+                  searchResults.map((result) => (
                     <div
                       key={result.id}
                       onClick={() => handleSelectMatch(result)}
                       className={cn(
                         'flex items-center gap-3 p-2 rounded-md cursor-pointer transition-colors',
-                        selectedMatch?.tmdbId === result.id ? 'bg-primary/10 text-primary-foreground' : 'hover:bg-muted'
+                        selectedMatch?.tmdbId === result.id
+                          ? 'bg-primary/10 text-primary-foreground'
+                          : 'hover:bg-muted'
                       )}
                     >
                       {result.posterUrl ? (
-                        <Image src={result.posterUrl} alt={result.title} width={40} height={60} className="rounded-sm bg-muted object-cover aspect-[2/3]" />
+                        <Image
+                          src={result.posterUrl}
+                          alt={result.title}
+                          width={40}
+                          height={60}
+                          className="rounded-sm bg-muted object-cover aspect-[2/3]"
+                        />
                       ) : (
-                        <div className="w-[40px] h-[60px] rounded-sm bg-muted flex items-center justify-center text-xs text-muted-foreground">No Art</div>
+                        <div className="w-[40px] h-[60px] rounded-sm bg-muted flex items-center justify-center text-xs text-muted-foreground">
+                          No Art
+                        </div>
                       )}
                       <div className="flex-1">
                         <p className="font-semibold text-sm">{result.title}</p>
-                        <p className="text-xs text-muted-foreground">{result.year}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {result.year}
+                        </p>
                       </div>
-                       {selectedMatch?.tmdbId === result.id && (
+                      {selectedMatch?.tmdbId === result.id && (
                         <CheckCircle className="w-5 h-5 text-primary" />
                       )}
                     </div>
                   ))
                 ) : (
-                  <p className="text-center text-sm text-muted-foreground py-4">No search results.</p>
+                  <p className="text-center text-sm text-muted-foreground py-4">
+                    No search results.
+                  </p>
                 )}
               </div>
             </ScrollArea>
@@ -350,7 +383,10 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
               </Label>
             </div>
 
-            <Button onClick={handleConfirmFix} disabled={!selectedMatch || isFixing}>
+            <Button
+              onClick={handleConfirmFix}
+              disabled={!selectedMatch || isFixing}
+            >
               {isFixing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Confirm Fix
             </Button>
@@ -360,25 +396,45 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
           <div className="space-y-4">
             <Tabs defaultValue="posters" className="w-full">
               <TabsList>
-                <TabsTrigger value="posters"><ImageIcon className="mr-2" /> Posters</TabsTrigger>
-                <TabsTrigger value="backdrops"><Images className="mr-2" /> Backdrops</TabsTrigger>
-                <TabsTrigger value="trailers"><Video className="mr-2" /> Trailers</TabsTrigger>
+                <TabsTrigger value="posters">
+                  <ImageIcon className="mr-2" /> Posters
+                </TabsTrigger>
+                <TabsTrigger value="backdrops">
+                  <Images className="mr-2" /> Backdrops
+                </TabsTrigger>
+                <TabsTrigger value="trailers">
+                  <Video className="mr-2" /> Trailers
+                </TabsTrigger>
               </TabsList>
               <div className="pt-4 min-h-[360px]">
-                {mediaLoading && <div className="flex items-center justify-center h-full"><Loader2 className="animate-spin text-muted-foreground" /></div>}
+                {mediaLoading && (
+                  <div className="flex items-center justify-center h-full">
+                    <Loader2 className="animate-spin text-muted-foreground" />
+                  </div>
+                )}
                 {!mediaLoading && mediaData && (
                   <>
                     <TabsContent value="posters">
                       <ScrollArea className="h-[360px]">
                         <div className="grid grid-cols-4 gap-2 pr-4">
-                          {mediaData.posters.map(p => (
-                            <button key={p.url} onClick={() => handleManualSet('poster', p.url)} className="relative aspect-[2/3] rounded-md overflow-hidden group">
-                              <Image src={p.url} alt="Poster" fill className="object-cover" />
-                              {artworkSaving?.type === 'poster' && artworkSaving.url === p.url && (
-                                <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
-                                  <Loader2 className="animate-spin text-white" />
-                                </div>
-                              )}
+                          {mediaData.posters.map((p) => (
+                            <button
+                              key={p.url}
+                              onClick={() => handleManualSet('poster', p.url)}
+                              className="relative aspect-[2/3] rounded-md overflow-hidden group"
+                            >
+                              <Image
+                                src={p.url}
+                                alt="Poster"
+                                fill
+                                className="object-cover"
+                              />
+                              {artworkSaving?.type === 'poster' &&
+                                artworkSaving.url === p.url && (
+                                  <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
+                                    <Loader2 className="animate-spin text-white" />
+                                  </div>
+                                )}
                             </button>
                           ))}
                         </div>
@@ -387,14 +443,24 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
                     <TabsContent value="backdrops">
                       <ScrollArea className="h-[360px]">
                         <div className="grid grid-cols-2 gap-2 pr-4">
-                          {mediaData.backdrops.map(b => (
-                            <button key={b.url} onClick={() => handleManualSet('backdrop', b.url)} className="relative aspect-video rounded-md overflow-hidden group">
-                              <Image src={b.url} alt="Backdrop" fill className="object-cover" />
-                              {artworkSaving?.type === 'backdrop' && artworkSaving.url === b.url && (
-                                <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
-                                  <Loader2 className="animate-spin text-white" />
-                                </div>
-                              )}
+                          {mediaData.backdrops.map((b) => (
+                            <button
+                              key={b.url}
+                              onClick={() => handleManualSet('backdrop', b.url)}
+                              className="relative aspect-video rounded-md overflow-hidden group"
+                            >
+                              <Image
+                                src={b.url}
+                                alt="Backdrop"
+                                fill
+                                className="object-cover"
+                              />
+                              {artworkSaving?.type === 'backdrop' &&
+                                artworkSaving.url === b.url && (
+                                  <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
+                                    <Loader2 className="animate-spin text-white" />
+                                  </div>
+                                )}
                             </button>
                           ))}
                         </div>
@@ -403,19 +469,32 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
                     <TabsContent value="trailers">
                       <ScrollArea className="h-[360px]">
                         <div className="space-y-2 pr-4">
-                          {mediaData.videos.map(v => (
-                            <button key={v.key} onClick={() => handleManualSet('video', v.key)} className="w-full flex items-center gap-3 p-2 rounded-md hover:bg-muted group">
+                          {mediaData.videos.map((v) => (
+                            <button
+                              key={v.key}
+                              onClick={() => handleManualSet('video', v.key)}
+                              className="w-full flex items-center gap-3 p-2 rounded-md hover:bg-muted group"
+                            >
                               <div className="w-24 aspect-video relative rounded-md overflow-hidden shrink-0">
-                                <Image src={v.thumbnailUrl} alt={v.name} fill className="object-cover" />
-                                {artworkSaving?.type === 'video' && `https://www.youtube.com/watch?v=${v.key}` === artworkSaving.url && (
-                                  <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
-                                    <Loader2 className="animate-spin text-white" />
-                                  </div>
-                                )}
+                                <Image
+                                  src={v.thumbnailUrl}
+                                  alt={v.name}
+                                  fill
+                                  className="object-cover"
+                                />
+                                {artworkSaving?.type === 'video' &&
+                                  `https://www.youtube.com/watch?v=${v.key}` ===
+                                    artworkSaving.url && (
+                                    <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
+                                      <Loader2 className="animate-spin text-white" />
+                                    </div>
+                                  )}
                               </div>
                               <div className="text-left">
                                 <p className="text-sm font-medium">{v.name}</p>
-                                <p className="text-xs text-muted-foreground">{v.type}</p>
+                                <p className="text-xs text-muted-foreground">
+                                  {v.type}
+                                </p>
                               </div>
                             </button>
                           ))}
@@ -427,7 +506,9 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
                 {!mediaLoading && !mediaData && (
                   <div className="flex flex-col items-center justify-center h-full text-muted-foreground text-center">
                     <ImageIcon />
-                    <p className="mt-2 text-sm">Select a match to see media</p>
+                    <p className="mt-2 text-sm">
+                      Select a match to see media
+                    </p>
                   </div>
                 )}
               </div>
@@ -436,7 +517,9 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
         </div>
 
         <DialogFooter className="pt-6">
-          <Button variant="outline" onClick={onClose} disabled={isFixing}>Cancel</Button>
+          <Button variant="outline" onClick={onClose} disabled={isFixing}>
+            Cancel
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
