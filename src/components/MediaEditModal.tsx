@@ -398,7 +398,10 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
                             <button
                               key={p.url}
                               onClick={() => handleManualSet('poster', p.url)}
-                              className="relative aspect-[2/3] rounded-md overflow-hidden group"
+                              className={cn(
+                                "relative aspect-[2/3] rounded-md overflow-hidden group",
+                                item.current.posterUrl === p.url && 'ring-2 ring-primary ring-offset-2 ring-offset-background'
+                              )}
                             >
                               <Image
                                 src={p.url}
@@ -424,7 +427,10 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
                             <button
                               key={b.url}
                               onClick={() => handleManualSet('backdrop', b.url)}
-                              className="relative aspect-video rounded-md overflow-hidden group"
+                              className={cn(
+                                "relative aspect-video rounded-md overflow-hidden group",
+                                item.current.backdropUrl === b.url && 'ring-2 ring-primary ring-offset-2 ring-offset-background'
+                              )}
                             >
                               <Image
                                 src={b.url}
@@ -446,35 +452,40 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
                     <TabsContent value="trailers">
                       <ScrollArea className="h-[360px]">
                         <div className="space-y-2 pr-4">
-                          {mediaData.videos.map((v) => (
-                            <button
-                              key={v.key}
-                              onClick={() => handleManualSet('video', v.key)}
-                              className="w-full flex items-center gap-3 p-2 rounded-md hover:bg-muted group"
-                            >
-                              <div className="w-24 aspect-video relative rounded-md overflow-hidden shrink-0">
-                                <Image
-                                  src={v.thumbnailUrl}
-                                  alt={v.name}
-                                  fill
-                                  className="object-cover"
-                                />
-                                {artworkSaving?.type === 'video' &&
-                                  `https://www.youtube.com/watch?v=${v.key}` ===
-                                    artworkSaving.url && (
-                                    <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
-                                      <Loader2 className="animate-spin text-white" />
-                                    </div>
-                                  )}
-                              </div>
-                              <div className="text-left">
-                                <p className="text-sm font-medium">{v.name}</p>
-                                <p className="text-xs text-muted-foreground">
-                                  {v.type}
-                                </p>
-                              </div>
-                            </button>
-                          ))}
+                          {mediaData.videos.map((v) => {
+                            const videoUrl = `https://www.youtube.com/watch?v=${v.key}`;
+                            return (
+                              <button
+                                key={v.key}
+                                onClick={() => handleManualSet('video', v.key)}
+                                className={cn(
+                                  "w-full flex items-center gap-3 p-2 rounded-md hover:bg-muted group",
+                                  item.current.videoLink === videoUrl && 'ring-2 ring-primary ring-offset-2 ring-offset-background'
+                                )}
+                              >
+                                <div className="w-24 aspect-video relative rounded-md overflow-hidden shrink-0">
+                                  <Image
+                                    src={v.thumbnailUrl}
+                                    alt={v.name}
+                                    fill
+                                    className="object-cover"
+                                  />
+                                  {artworkSaving?.type === 'video' &&
+                                    videoUrl === artworkSaving.url && (
+                                      <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
+                                        <Loader2 className="animate-spin text-white" />
+                                      </div>
+                                    )}
+                                </div>
+                                <div className="text-left">
+                                  <p className="text-sm font-medium">{v.name}</p>
+                                  <p className="text-xs text-muted-foreground">
+                                    {v.type}
+                                  </p>
+                                </div>
+                              </button>
+                            );
+                          })}
                         </div>
                       </ScrollArea>
                     </TabsContent>
