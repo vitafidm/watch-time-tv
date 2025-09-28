@@ -4,13 +4,16 @@
 import { useAuthUser } from "@/hooks/useAuthUser";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Tv } from "lucide-react";
+import { Tv, RefreshCw } from "lucide-react";
 import type { MediaDoc } from "@/lib/db.types";
 import { useMemo, useRef, useState, useEffect, useCallback } from "react";
 import Image from "next/image";
 import { useInfiniteFirestore } from "@/hooks/useInfiniteFirestore";
 import { MediaEditButton } from "@/components/MediaEditButton";
 import { MediaEditModal, type MediaEditModalItem } from "@/components/MediaEditModal";
+import { Button } from "@/components/ui/button";
+import { useToast } from "@/hooks/use-toast";
+import { callFunction } from "@/lib/api";
 
 // Represents a document from the /users/{uid}/shows collection
 type ShowDoc = {
@@ -57,7 +60,10 @@ function ShowCard({ item, onEdit }: { item: ShowDoc, onEdit: () => void; }) {
 
 function TvLibrary() {
   const { user } = useAuthUser();
-  const { items: fetchedShows, loading, hasMore, attachSentinel, reset } = useInfiniteFirestore<ShowDoc>({
+  const { toast } = useToast();
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
+  const { items: fetchedShows, loading, hasMore, attachSentinel, resetAndFetch } = useInfiniteFirestore<ShowDoc>({
       collectionPath: user ? `users/${user.uid}/shows` : undefined,
       where: [['episodeCount', '>', 0]],
       orderBy: ['updatedAt', 'desc'],
@@ -100,11 +106,39 @@ function TvLibrary() {
 
   const showInitialLoading = loading && shows.length === 0;
 
+  const handleRefresh = async () => {
+    if (!user) return;
+
+    setIsRefreshing(true);
+    try {
+      const idToken = await user.getIdToken();
+      await callFunction('materializeUserShows', { uid: user.uid }, idToken);
+      
+      if (resetAndFetch) {
+        await resetAndFetch();
+      }
+
+      toast({ title: "Library refreshed" });
+    } catch (error: any) {
+      console.error("Failed to refresh TV library:", error);
+      toast({ title: "Refresh failed", description: error.message, variant: "destructive" });
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
+
   return (
     <div className="space-y-6">
-      <div className="flex items-center gap-4">
-        <Tv className="h-8 w-8 text-primary" />
-        <h1 className="font-headline text-4xl font-bold tracking-tight">TV Library</h1>
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div className="flex items-center gap-4">
+            <Tv className="h-8 w-8 text-primary" />
+            <h1 className="font-headline text-4xl font-bold tracking-tight">TV Library</h1>
+        </div>
+        <Button onClick={handleRefresh} disabled={isRefreshing || loading}>
+            <RefreshCw className={`mr-2 h-4 w-4 ${isRefreshing ? 'animate-spin' : ''}`} />
+            {isRefreshing ? 'Refreshing...' : 'Refresh'}
+        </Button>
       </div>
 
       {showInitialLoading && (
@@ -154,5 +188,7 @@ export default function TvLibraryPage() {
         </ProtectedRoute>
     )
 }
+
+    
 
     
