@@ -23,6 +23,7 @@ export interface MediaEditModalItem {
   kind: 'movie' | 'episode' | 'show';
   current: {
     title?: string;
+    normalizedTitle?: string;
     displayTitle?: string;
     tmdbId?: number;
     posterUrl?: string | null;
@@ -61,7 +62,7 @@ function tmdbIdFromShowRef(ref?: string | null): number | null {
 
 function titleForSearch(item: MediaEditModalItem | null): string | null {
   if (!item) return null;
-  return item.current?.displayTitle || item.current?.title || item.current?.showTitle || null;
+  return item.current?.normalizedTitle || item.current?.title || item.current?.showTitle || null;
 }
 
 export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModalProps) {
@@ -109,11 +110,13 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
       return;
     }
     
-    const apiKind = isMovie || isShow ? 'tv' : 'movie';
+    const apiKind = isShow ? 'tv' : isMovie ? 'movie' : 'tv';
 
     async function preload() {
       if (!user) return;
-      setSearchQuery(titleForSearch(item) || "");
+      
+      const initialSearchTitle = titleForSearch(item) || "";
+      setSearchQuery(initialSearchTitle);
 
       const idToken = await user.getIdToken();
       let tmdbId: number | null = item.current?.tmdbId ?? null;
@@ -163,7 +166,7 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
     setSelectedMatch(null);
     setSearchResults([]);
     try {
-      const apiKind = isMovie ? 'movie' : 'tv';
+      const apiKind = isShow ? 'tv' : isMovie ? 'movie' : 'tv';
       const idToken = await user.getIdToken();
       const results = await callFunction<SearchResult[]>('tmdbSearch', { q: searchQuery, kind: apiKind }, idToken);
       setSearchResults(results || []);
@@ -176,7 +179,7 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
 
   const handleSelectMatch = (result: SearchResult) => {
     if (!item) return;
-    const apiKind = isMovie || isShow ? 'tv' : 'movie';
+    const apiKind = isShow ? 'tv' : isMovie ? 'movie' : 'tv';
     setSelectedMatch({ kind: apiKind, tmdbId: result.id, title: result.title });
     fetchMediaData(apiKind, result.id);
   };
@@ -211,7 +214,7 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
         if (updateDisplayTitle) {
           const newTitle = selectedMatch.title;
           patch.displayTitle = newTitle;
-          if (item.kind === 'show') {
+          if (item.kind === 'show') { // Though this path isn't hit for shows, keeping for robustness
             patch.title = newTitle;
           }
         }
@@ -276,22 +279,6 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
         <div className="grid md:grid-cols-2 gap-6 pt-4">
           {/* Left Column: Matching */}
           <div className="flex flex-col gap-4">
-            <div className="flex gap-4">
-              <div className="w-24 flex-shrink-0">
-                <Image
-                  src={item.current.posterUrl || `https://picsum.photos/seed/${item.id}/100/150`}
-                  alt={displayTitleText}
-                  width={100}
-                  height={150}
-                  className="rounded-md object-cover aspect-[2/3] bg-muted"
-                />
-              </div>
-              <div className="space-y-1">
-                <p className="text-sm text-muted-foreground">Current Title</p>
-                <p className="font-semibold text-lg">{displayTitleText}</p>
-              </div>
-            </div>
-
             <form onSubmit={handleSearch} className="flex gap-2">
               <Input
                 value={searchQuery}
@@ -304,30 +291,34 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
               </Button>
             </form>
 
-            <ScrollArea className="h-64 rounded-md border">
+            <ScrollArea className="h-[360px] rounded-md border">
               <div className="p-2 space-y-1">
-                {searchResults.map(result => (
-                  <div
-                    key={result.id}
-                    onClick={() => handleSelectMatch(result)}
-                    className={cn(
-                      'flex items-center gap-3 p-2 rounded-md cursor-pointer transition-colors',
-                      selectedMatch?.tmdbId === result.id ? 'bg-accent text-accent-foreground' : 'hover:bg-muted'
-                    )}
-                  >
-                    {result.posterUrl ? (
-                      <Image src={result.posterUrl} alt={result.title} width={40} height={60} className="rounded-sm bg-muted object-cover aspect-[2/3]" />
-                    ) : (
-                      <div className="w-[40px] h-[60px] rounded-sm bg-muted flex items-center justify-center text-xs text-muted-foreground">No Art</div>
-                    )}
-                    <div className="flex-1">
-                      <p className="font-semibold text-sm">{result.title}</p>
-                      <p className="text-xs text-muted-foreground">{result.year}</p>
+                {isSearching ? (
+                  <div className="flex justify-center py-4"><Loader2 className="animate-spin text-muted-foreground" /></div>
+                ) : searchResults.length > 0 ? (
+                  searchResults.map(result => (
+                    <div
+                      key={result.id}
+                      onClick={() => handleSelectMatch(result)}
+                      className={cn(
+                        'flex items-center gap-3 p-2 rounded-md cursor-pointer transition-colors',
+                        selectedMatch?.tmdbId === result.id ? 'bg-accent text-accent-foreground' : 'hover:bg-muted'
+                      )}
+                    >
+                      {result.posterUrl ? (
+                        <Image src={result.posterUrl} alt={result.title} width={40} height={60} className="rounded-sm bg-muted object-cover aspect-[2/3]" />
+                      ) : (
+                        <div className="w-[40px] h-[60px] rounded-sm bg-muted flex items-center justify-center text-xs text-muted-foreground">No Art</div>
+                      )}
+                      <div className="flex-1">
+                        <p className="font-semibold text-sm">{result.title}</p>
+                        <p className="text-xs text-muted-foreground">{result.year}</p>
+                      </div>
                     </div>
-                  </div>
-                ))}
-                {!isSearching && searchResults.length === 0 && <p className="text-center text-sm text-muted-foreground py-4">No search results.</p>}
-                {isSearching && <div className="flex justify-center py-4"><Loader2 className="animate-spin text-muted-foreground" /></div>}
+                  ))
+                ) : (
+                  <p className="text-center text-sm text-muted-foreground py-4">No search results.</p>
+                )}
               </div>
             </ScrollArea>
 
@@ -435,5 +426,3 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
     </Dialog>
   );
 }
-
-    
