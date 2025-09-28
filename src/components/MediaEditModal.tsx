@@ -75,8 +75,6 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
   const [searchResults, setSearchResults] = React.useState<SearchResult[]>([]);
   const [isSearching, setIsSearching] = React.useState(false);
 
-  const [updateDisplayTitle, setUpdateDisplayTitle] = React.useState(true);
-
   const [isFixing, setIsFixing] = React.useState(false);
   const [selectedMatch, setSelectedMatch] = React.useState<{ kind: 'movie' | 'tv'; tmdbId: number; title: string; } | null>(null);
   const [mediaData, setMediaData] = React.useState<{ posters:any[], backdrops:any[], videos:any[] } | null>(null);
@@ -204,6 +202,7 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
       
       let functionName;
       let payload;
+      let apiKind: 'movie' | 'tv';
 
       if (item.kind === 'show') {
         functionName = 'tmdbFixShow';
@@ -214,13 +213,14 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
           keepOverrides: true,
         };
       } else {
+        apiKind = item.kind === 'movie' ? 'movie' : 'tv';
         functionName = 'tmdbFixMatch';
         payload = {
           collection: item.collectionPath,
           docId: item.id,
-          kind: item.kind === 'movie' ? 'movie' : 'tv', // Ensure correct kind for backend
+          kind: apiKind,
           tmdbId: selectedMatch.tmdbId,
-          updateDisplayTitle,
+          updateDisplayTitle: true,
           includeCast: true,
         };
       }
@@ -231,11 +231,14 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
 
       if (item.kind !== 'show') {
           const patch: Partial<any> = {};
-          if (updateDisplayTitle) {
-              const newTitle = selectedMatch.title;
-              patch.displayTitle = newTitle;
-              patch.normalizedTitle = newTitle;
-          }
+          const newTitle = selectedMatch.title;
+          patch.displayTitle = newTitle;
+          patch.normalizedTitle = newTitle;
+          
+          // To be safe, let's just re-fetch the media data and pass all new fields
+          const updatedMedia = await callFunction<any>('tmdbMedia', { kind: apiKind, tmdbId: selectedMatch.tmdbId }, idToken);
+          if (updatedMedia.posters?.[0]?.url) patch.posterUrl = updatedMedia.posters[0].url;
+
           onApplied?.(item.id, patch);
       } else {
         router.refresh();
@@ -370,18 +373,6 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
                 )}
               </div>
             </ScrollArea>
-
-            <div className="flex items-center space-x-2">
-              <Checkbox
-                id="updateTitle"
-                checked={updateDisplayTitle}
-                onCheckedChange={(checked) => setUpdateDisplayTitle(!!checked)}
-                disabled={!selectedMatch}
-              />
-              <Label htmlFor="updateTitle" className="text-sm font-normal">
-                Update displayed title to "{selectedMatch?.title || '...'}"
-              </Label>
-            </div>
 
             <Button
               onClick={handleConfirmFix}
@@ -525,3 +516,5 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
     </Dialog>
   );
 }
+
+    
