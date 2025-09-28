@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Search, Loader2, Video, Images, Image as ImageIcon } from "lucide-react";
+import { Search, Loader2, Video, Images, Image as ImageIcon, CheckCircle } from "lucide-react";
 import Image from "next/image";
 import { callFunction } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
@@ -26,6 +26,7 @@ export interface MediaEditModalItem {
     normalizedTitle?: string;
     displayTitle?: string;
     tmdbId?: number;
+    year?: number;
     posterUrl?: string | null;
     backdropUrl?: string | null;
     videoLink?: string | null;
@@ -107,6 +108,7 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
       setSearchResults([]);
       setSelectedMatch(null);
       setMediaData(null);
+      setIsSearching(false);
       return;
     }
     
@@ -114,50 +116,53 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
 
     async function preload() {
       if (!user) return;
-      
+
       const initialSearchTitle = titleForSearch(item) || "";
+      const initialSearchYear = item.current?.year || null;
       setSearchQuery(initialSearchTitle);
-
-      const idToken = await user.getIdToken();
-      let tmdbId: number | null = item.current?.tmdbId ?? null;
       
-      if (isShow) {
-        tmdbId = Number(item.id);
-      } else if (item.kind === 'episode') {
-        tmdbId = tmdbIdFromShowRef(item.current?.showRef);
-      }
-      
-      let matchTitle: string | null = null;
+      const currentTmdbId = isShow ? Number(item.id) : (item.current?.tmdbId ?? null);
 
-      if (!tmdbId) {
-        const q = titleForSearch(item);
-        if (q) {
-          try {
-            const results = await callFunction<any[]>('tmdbSearch', { q, kind: apiKind }, idToken);
-            if (Array.isArray(results) && results.length > 0) {
-              tmdbId = results[0].id;
-              matchTitle = results[0].title ?? q;
-              setSelectedMatch({ kind: apiKind, tmdbId, title: matchTitle });
-            }
-          } catch {
-            // ignore
+      if (!initialSearchTitle) return;
+
+      setIsSearching(true);
+      
+      try {
+        const idToken = await user.getIdToken();
+        const results = await callFunction<SearchResult[]>('tmdbSearch', { q: initialSearchTitle, kind: apiKind, year: initialSearchYear });
+        
+        let finalResults = results || [];
+        let defaultSelection: SearchResult | null = null;
+        
+        if (currentTmdbId) {
+          const currentIndex = finalResults.findIndex(r => r.id === currentTmdbId);
+          if (currentIndex > -1) {
+            const currentMatch = finalResults.splice(currentIndex, 1)[0];
+            finalResults.unshift(currentMatch); // Move current match to the top
+            defaultSelection = currentMatch;
           }
         }
-      } else {
-        matchTitle = titleForSearch(item) || '';
-        setSelectedMatch({ kind: apiKind, tmdbId, title: matchTitle });
-      }
+        
+        if (!defaultSelection && finalResults.length > 0) {
+            defaultSelection = finalResults[0];
+        }
+        
+        setSearchResults(finalResults);
 
-      if (!tmdbId) {
-        setMediaData(null);
-        return;
-      }
+        if (defaultSelection) {
+          handleSelectMatch(defaultSelection, true);
+        }
 
-      fetchMediaData(apiKind, tmdbId);
+      } catch (err: any) {
+        toast({ title: "Auto-search failed", description: err.message, variant: 'destructive' });
+      } finally {
+        setIsSearching(false);
+      }
     }
 
     preload();
-  }, [open, item, user, isMovie, isShow, fetchMediaData]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, item, user, isMovie, isShow]);
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -165,11 +170,15 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
     setIsSearching(true);
     setSelectedMatch(null);
     setSearchResults([]);
+    setMediaData(null);
     try {
       const apiKind = isShow ? 'tv' : isMovie ? 'movie' : 'tv';
       const idToken = await user.getIdToken();
       const results = await callFunction<SearchResult[]>('tmdbSearch', { q: searchQuery, kind: apiKind }, idToken);
       setSearchResults(results || []);
+      if(results?.[0]) {
+        handleSelectMatch(results[0], true);
+      }
     } catch (err: any) {
       toast({ title: "Search failed", description: err.message, variant: 'destructive' });
     } finally {
@@ -177,10 +186,13 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
     }
   };
 
-  const handleSelectMatch = (result: SearchResult) => {
+  const handleSelectMatch = (result: SearchResult, isAutoSelection: boolean = false) => {
     if (!item) return;
     const apiKind = isShow ? 'tv' : isMovie ? 'movie' : 'tv';
     setSelectedMatch({ kind: apiKind, tmdbId: result.id, title: result.title });
+    if (!isAutoSelection) {
+        setSearchQuery(result.title); // Update search query on manual selection
+    }
     fetchMediaData(apiKind, result.id);
   };
 
@@ -214,7 +226,8 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
         if (updateDisplayTitle) {
           const newTitle = selectedMatch.title;
           patch.displayTitle = newTitle;
-          if (item.kind === 'show') { // Though this path isn't hit for shows, keeping for robustness
+          patch.normalizedTitle = newTitle;
+          if (item.kind === 'show') { 
             patch.title = newTitle;
           }
         }
@@ -267,7 +280,7 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
   if (!item) return null;
 
   return (
-    <Dialog open={open} onOpenChange={onClose}>
+    <Dialog open={open} onOpenChange={(isOpen) => !isFixing && onClose()}>
       <DialogContent className="max-w-4xl">
         <DialogHeader>
           <DialogTitle>Edit Media</DialogTitle>
@@ -293,7 +306,7 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
 
             <ScrollArea className="h-[360px] rounded-md border">
               <div className="p-2 space-y-1">
-                {isSearching ? (
+                {isSearching && searchResults.length === 0 ? (
                   <div className="flex justify-center py-4"><Loader2 className="animate-spin text-muted-foreground" /></div>
                 ) : searchResults.length > 0 ? (
                   searchResults.map(result => (
@@ -302,7 +315,7 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
                       onClick={() => handleSelectMatch(result)}
                       className={cn(
                         'flex items-center gap-3 p-2 rounded-md cursor-pointer transition-colors',
-                        selectedMatch?.tmdbId === result.id ? 'bg-accent text-accent-foreground' : 'hover:bg-muted'
+                        selectedMatch?.tmdbId === result.id ? 'bg-primary/10 text-primary-foreground' : 'hover:bg-muted'
                       )}
                     >
                       {result.posterUrl ? (
@@ -314,6 +327,9 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
                         <p className="font-semibold text-sm">{result.title}</p>
                         <p className="text-xs text-muted-foreground">{result.year}</p>
                       </div>
+                       {selectedMatch?.tmdbId === result.id && (
+                        <CheckCircle className="w-5 h-5 text-primary" />
+                      )}
                     </div>
                   ))
                 ) : (
@@ -420,7 +436,7 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
         </div>
 
         <DialogFooter className="pt-6">
-          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button variant="outline" onClick={onClose} disabled={isFixing}>Cancel</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
