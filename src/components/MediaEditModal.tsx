@@ -12,7 +12,6 @@ import Image from "next/image";
 import { callFunction } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
 import { useAuthUser } from "@/hooks/useAuthUser";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import { useRouter } from "next/navigation";
@@ -200,17 +199,17 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
     try {
       const idToken = await user.getIdToken();
       
-      let functionName;
-      let payload;
+      let functionName: string;
+      let payload: any;
       let apiKind: 'movie' | 'tv';
-
+  
       if (item.kind === 'show') {
+        apiKind = 'tv';
         functionName = 'tmdbFixShow';
         payload = {
           uid: user.uid,
           oldShowId: Number(item.id),
           newShowId: selectedMatch.tmdbId,
-          keepOverrides: true,
         };
       } else {
         apiKind = item.kind === 'movie' ? 'movie' : 'tv';
@@ -220,30 +219,25 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
           docId: item.id,
           kind: apiKind,
           tmdbId: selectedMatch.tmdbId,
-          updateDisplayTitle: true,
-          includeCast: true,
+          updateDisplayTitle: true, 
         };
       }
-
+  
       await callFunction(functionName, payload, idToken);
       
       toast({ title: "Match Updated", description: `Successfully re-matched with "${selectedMatch.title}".` });
-
+  
       if (item.kind !== 'show') {
-          const patch: Partial<any> = {};
-          const newTitle = selectedMatch.title;
-          patch.displayTitle = newTitle;
-          patch.normalizedTitle = newTitle;
-          
-          // To be safe, let's just re-fetch the media data and pass all new fields
-          const updatedMedia = await callFunction<any>('tmdbMedia', { kind: apiKind, tmdbId: selectedMatch.tmdbId }, idToken);
-          if (updatedMedia.posters?.[0]?.url) patch.posterUrl = updatedMedia.posters[0].url;
-
-          onApplied?.(item.id, patch);
+        const patch: Partial<any> = {};
+        const newTitle = selectedMatch.title;
+        patch.displayTitle = newTitle;
+        patch.normalizedTitle = newTitle;
+        
+        onApplied?.(item.id, patch);
       } else {
         router.refresh();
       }
-
+  
       onClose();
     } catch (err: any) {
       toast({ title: "Fix Match Failed", description: err.message, variant: 'destructive' });
@@ -324,7 +318,7 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
               </Button>
             </form>
 
-            <ScrollArea className="h-[360px] rounded-md border">
+            <ScrollArea className="h-[412px] rounded-md border">
               <div className="p-2 space-y-1">
                 {isSearching && searchResults.length === 0 ? (
                   <div className="flex justify-center py-4">
@@ -373,18 +367,10 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
                 )}
               </div>
             </ScrollArea>
-
-            <Button
-              onClick={handleConfirmFix}
-              disabled={!selectedMatch || isFixing}
-            >
-              {isFixing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Confirm Fix
-            </Button>
           </div>
 
           {/* Right Column: Artwork Galleries */}
-          <div className="space-y-4">
+          <div className="flex flex-col gap-4">
             <Tabs defaultValue="posters" className="w-full">
               <TabsList>
                 <TabsTrigger value="posters">
@@ -504,14 +490,20 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
                 )}
               </div>
             </Tabs>
+             <div className="flex justify-end gap-2 pt-2">
+                <Button variant="outline" onClick={onClose} disabled={isFixing}>
+                    Cancel
+                </Button>
+                <Button
+                    onClick={handleConfirmFix}
+                    disabled={!selectedMatch || isFixing}
+                >
+                    {isFixing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                    Update Media
+                </Button>
+            </div>
           </div>
         </div>
-
-        <DialogFooter className="pt-6">
-          <Button variant="outline" onClick={onClose} disabled={isFixing}>
-            Cancel
-          </Button>
-        </DialogFooter>
       </DialogContent>
     </Dialog>
   );
