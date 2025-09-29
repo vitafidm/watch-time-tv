@@ -1,3 +1,4 @@
+
 import "./preinit-admin"; // <-- MUST be first: ensure admin.initializeApp() runs before any flow
 
 import * as functions from "firebase-functions";
@@ -141,6 +142,7 @@ exports.tmdbEnrich = functions.https.onRequest(async (req, res) => {
   });
 });
 
+/*
 exports.tmdbBackfill = functions.pubsub
   .schedule("every 60 minutes")
   .onRun(async () => {
@@ -151,6 +153,7 @@ exports.tmdbBackfill = functions.pubsub
       return null;
     }
   });
+*/
 
 // direct
 exports.tmdbBackfillMissing = tmdbBackfillMissing;
