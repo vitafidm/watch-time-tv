@@ -213,6 +213,7 @@ exports.default = functions
                         continue;
                     sentToEnrich += chunk.length;
                     const r = await (0, tmdb_enrich_flow_1.tmdbEnrichFlow)(uid, { items: chunk });
+                    await new Promise(resolve => setTimeout(resolve, 1500));
                     const results = (r?.results || []);
                     for (const row of results) {
                         if (row.status === "enriched")

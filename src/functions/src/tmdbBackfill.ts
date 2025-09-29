@@ -1,3 +1,4 @@
+
 import * as functions from "firebase-functions";
 import * as admin from "firebase-admin";
 import cors from "cors";
@@ -243,7 +244,7 @@ export default functions
             sentToEnrich += chunk.length;
 
             const r = await tmdbEnrichFlow(uid, { items: chunk as any });
-            await new Promise(resolve => setTimeout(resolve, 1500));
+            await new Promise(resolve => setTimeout(resolve, 10500));
             const results = (r?.results || []) as Array<{
               mediaId: string;
               status: "enriched" | "not_found" | "error";
@@ -309,3 +310,5 @@ export default functions
       }
     });
   });
+
+    
