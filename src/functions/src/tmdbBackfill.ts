@@ -243,6 +243,7 @@ export default functions
             sentToEnrich += chunk.length;
 
             const r = await tmdbEnrichFlow(uid, { items: chunk as any });
+            await new Promise(resolve => setTimeout(resolve, 1500));
             const results = (r?.results || []) as Array<{
               mediaId: string;
               status: "enriched" | "not_found" | "error";
