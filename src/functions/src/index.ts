@@ -156,9 +156,7 @@ exports.tmdbBackfill = functions.pubsub
 */
 
 // direct
-exports.tmdbBackfillMissing = functions
-  .runWith({ timeoutSeconds: 540, memory: "1GB" })
-  .https.onRequest(tmdbBackfillMissing);
+exports.tmdbBackfillMissing = tmdbBackfillMissing;
 exports.tmdbSearch = tmdbSearch;
 exports.tmdbFixMatch = tmdbFixMatch;
 exports.tmdbManualSet = tmdbManualSet;

@@ -90,7 +90,6 @@ export default functions
           1000
         ); // docs per Firestore page
 
-        // HARD CAP at 50 because tmdbEnrich only accepts up to 50 items per call
         const batchSize = clamp(
           parseInt(String(b.batchSize ?? q.batchSize ?? "50"), 10) || 50,
           1,
@@ -113,6 +112,7 @@ export default functions
         let notFound = 0;
         let errors = 0;
         let skipped = 0;
+        let firstErrorMessage: string | null = null;
 
         const preview: any[] = [];
 
@@ -158,7 +158,6 @@ export default functions
             showTitle?: string | null;
           };
 
-          // Build enrichable items for this page
           const pageItems: Array<ItemMovie | ItemEpisode> = [];
           for (const d of snap.docs) {
             const m = (d.data() || {}) as Media;
@@ -187,7 +186,6 @@ export default functions
 
               let showTitle = (m.showTitle || null) as string | null;
 
-              // Try the referenced show doc if present
               if (!showTitle && m.showRef && typeof m.showRef === "string") {
                 try {
                   const showSnap = await db.doc(m.showRef).get();
@@ -205,7 +203,6 @@ export default functions
                 }
               }
 
-              // Last resort: infer from filename/title
               if (!showTitle) {
                 const raw = (m.filename || m.title || "").trim();
                 showTitle = inferShowTitleFromFilename(raw);
@@ -214,8 +211,8 @@ export default functions
               if (showTitle && isNum(season) && isNum(episode)) {
                 pageItems.push({
                   mediaId: d.id,
-                  type: "episode", // <-- fixed
-                  title: showTitle, // <-- fixed
+                  type: "episode",
+                  title: showTitle,
                   season,
                   episode,
                 });
@@ -237,7 +234,6 @@ export default functions
 
           candidates += pageItems.length;
 
-          // Enrich whole page in chunks of <= batchSize (and batchSize <= 50)
           for (let i = 0; i < pageItems.length; i += batchSize) {
             const chunk = pageItems.slice(i, i + batchSize);
             if (!chunk.length) continue;
@@ -247,15 +243,20 @@ export default functions
                 const r = await tmdbEnrichFlow(uid, { items: chunk as any });
                 const results = (r?.results || []) as Array<{
                     mediaId: string;
-                    status: "enriched" | "not_found" | "error";
+                    status: "enriched" | "not_found" | "error" | "skipped";
                 }>;
     
                 for (const row of results) {
                     if (row.status === "enriched") enriched++;
                     else if (row.status === "not_found") notFound++;
+                    else if (row.status === "skipped") skipped++;
                     else errors++;
                 }
-
+            } catch (e) {
+                functions.logger.warn("Enrichment chunk failed", { error: (e as Error).message, count: chunk.length });
+                errors += chunk.length;
+                if (!firstErrorMessage) firstErrorMessage = (e as Error)?.message || String(e);
+            } finally {
                 if (Date.now() - started > SOFT_DEADLINE_MS && processAll) {
                   const last = snap.docs[snap.docs.length - 1];
                   const lastTs = last?.get("updatedAt");
@@ -264,6 +265,17 @@ export default functions
                       ? lastTs.toMillis()
                       : 0;
                   cursor = `${tsMs}|${last.id}`;
+                  
+                  const rateRef = db.doc(`users/${uid}/integrations_meta/tmdbRateLimit`);
+                  const rateSnap = await rateRef.get();
+                  let retryAfterMs = 11000;
+                  if (rateSnap.exists) {
+                    const until = rateSnap.get("rateLimitedUntil")?.toMillis();
+                    if (until && until > Date.now()) {
+                      retryAfterMs = Math.max(11000, until - Date.now() + 500);
+                    }
+                  }
+
                   return res.status(200).json({
                     scanned,
                     candidates,
@@ -273,19 +285,15 @@ export default functions
                     skipped,
                     errors,
                     nextCursor: cursor,
-                    ...(debug ? { preview } : {}),
+                    retryAfterMs,
+                    ...(debug ? { preview, firstErrorMessage } : {}),
                     info: "Soft deadline reached; resume with nextCursor.",
                   });
                 }
-            } catch (e) {
-                functions.logger.warn("Enrichment chunk failed", { error: (e as Error).message, count: chunk.length });
-                errors += chunk.length;
-            } finally {
                 await new Promise(resolve => setTimeout(resolve, 10500));
             }
           }
 
-          // Page cursor
           const last = snap.docs[snap.docs.length - 1];
           const lastTs = last?.get("updatedAt");
           const tsMs =
@@ -294,6 +302,16 @@ export default functions
 
           if (!processAll) break;
           if (!cursor) break;
+        }
+
+        const rateRef = db.doc(`users/${uid}/integrations_meta/tmdbRateLimit`);
+        const rateSnap = await rateRef.get();
+        let retryAfterMs = 11000;
+        if (rateSnap.exists) {
+            const until = rateSnap.get("rateLimitedUntil")?.toMillis();
+            if (until && until > Date.now()) {
+                retryAfterMs = Math.max(11000, until - Date.now() + 500);
+            }
         }
 
         return res.status(200).json({
@@ -305,7 +323,8 @@ export default functions
           skipped,
           errors,
           nextCursor: cursor || null,
-          ...(debug ? { preview } : {}),
+          retryAfterMs,
+          ...(debug ? { preview, firstErrorMessage } : {}),
         });
       } catch (e: any) {
         functions.logger.error("tmdbBackfillMissing fatal", e);
