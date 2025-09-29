@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useState } from 'react';
@@ -45,15 +46,13 @@ export function LibraryMaintenance() {
     try {
       const idToken = await user.getIdToken();
       
-      let cursor: string | null = null;
-      
-      const runScan = async (currentCursor: string | null): Promise<void> => {
+      const runScan = async (currentCursor: string | null, token: string): Promise<void> => {
         const body = { 
           uid: user.uid, 
           processAll: true,
           cursor: currentCursor 
         };
-        const response: any = await callFunction('tmdbBackfillMissing', body, idToken);
+        const response: any = await callFunction('tmdbBackfillMissing', body, token);
 
         setProgress(prev => ({
           scanned: prev.scanned + (response.scanned || 0),
@@ -64,11 +63,12 @@ export function LibraryMaintenance() {
         }));
 
         if (response.nextCursor) {
-          return runScan(response.nextCursor);
+          await new Promise(resolve => setTimeout(resolve, 1500));
+          return runScan(response.nextCursor, token);
         }
       };
 
-      await runScan(cursor);
+      await runScan(null, idToken);
       setIsComplete(true);
 
     } catch (err: any) {
