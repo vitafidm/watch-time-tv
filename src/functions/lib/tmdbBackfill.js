@@ -211,38 +211,45 @@ exports.default = functions
                     const chunk = pageItems.slice(i, i + batchSize);
                     if (!chunk.length)
                         continue;
-                    sentToEnrich += chunk.length;
-                    const r = await (0, tmdb_enrich_flow_1.tmdbEnrichFlow)(uid, { items: chunk });
-                    await new Promise(resolve => setTimeout(resolve, 10500));
-                    const results = (r?.results || []);
-                    for (const row of results) {
-                        if (row.status === "enriched")
-                            enriched++;
-                        else if (row.status === "not_found")
-                            notFound++;
-                        else
-                            errors++;
+                    try {
+                        sentToEnrich += chunk.length;
+                        const r = await (0, tmdb_enrich_flow_1.tmdbEnrichFlow)(uid, { items: chunk });
+                        const results = (r?.results || []);
+                        for (const row of results) {
+                            if (row.status === "enriched")
+                                enriched++;
+                            else if (row.status === "not_found")
+                                notFound++;
+                            else
+                                errors++;
+                        }
+                        if (Date.now() - started > SOFT_DEADLINE_MS && processAll) {
+                            const last = snap.docs[snap.docs.length - 1];
+                            const lastTs = last?.get("updatedAt");
+                            const tsMs = lastTs && typeof lastTs.toMillis === "function"
+                                ? lastTs.toMillis()
+                                : 0;
+                            cursor = `${tsMs}|${last.id}`;
+                            return res.status(200).json({
+                                scanned,
+                                candidates,
+                                sentToEnrich,
+                                enriched,
+                                notFound,
+                                skipped,
+                                errors,
+                                nextCursor: cursor,
+                                ...(debug ? { preview } : {}),
+                                info: "Soft deadline reached; resume with nextCursor.",
+                            });
+                        }
                     }
-                    // Soft deadline guard: if processing everything, bail out with a cursor to resume
-                    if (Date.now() - started > SOFT_DEADLINE_MS && processAll) {
-                        const last = snap.docs[snap.docs.length - 1];
-                        const lastTs = last?.get("updatedAt");
-                        const tsMs = lastTs && typeof lastTs.toMillis === "function"
-                            ? lastTs.toMillis()
-                            : 0;
-                        cursor = `${tsMs}|${last.id}`;
-                        return res.status(200).json({
-                            scanned,
-                            candidates,
-                            sentToEnrich,
-                            enriched,
-                            notFound,
-                            skipped,
-                            errors,
-                            nextCursor: cursor,
-                            ...(debug ? { preview } : {}),
-                            info: "Soft deadline reached; resume with nextCursor.",
-                        });
+                    catch (e) {
+                        functions.logger.warn("Enrichment chunk failed", { error: e.message, count: chunk.length });
+                        errors += chunk.length;
+                    }
+                    finally {
+                        await new Promise(resolve => setTimeout(resolve, 10500));
                     }
                 }
                 // Page cursor
