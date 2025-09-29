@@ -1,4 +1,3 @@
-
 {
   "indexes": [
     {
@@ -33,14 +32,16 @@
       "collectionGroup": "media",
       "queryScope": "COLLECTION_GROUP",
       "fields": [
-        {
-          "fieldPath": "type",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "addedAt",
-          "order": "DESCENDING"
-        }
+        { "fieldPath": "type", "order": "ASCENDING" },
+        { "fieldPath": "addedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "media",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "tmdbId", "order": "ASCENDING" },
+        { "fieldPath": "updatedAt", "order": "DESCENDING" }
       ]
     }
   ],

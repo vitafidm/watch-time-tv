@@ -194,17 +194,18 @@ exports.tmdbEnrich = functions.https.onRequest(async (req, res) => {
         }
     });
 });
+/*
 exports.tmdbBackfill = functions.pubsub
-    .schedule("every 60 minutes")
-    .onRun(async () => {
+  .schedule("every 60 minutes")
+  .onRun(async () => {
     try {
-        return await (0, tmdb_enrich_flow_1.tmdbBackfillSweep)();
+      return await tmdbBackfillSweep();
+    } catch (e) {
+      functions.logger.error("tmdbBackfill error", e);
+      return null;
     }
-    catch (e) {
-        functions.logger.error("tmdbBackfill error", e);
-        return null;
-    }
-});
+  });
+*/
 // direct
 exports.tmdbBackfillMissing = tmdbBackfill_1.default;
 exports.tmdbSearch = tmdbSearch_1.default;
