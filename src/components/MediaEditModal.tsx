@@ -197,54 +197,55 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
     if (!selectedMatch || !item || !user) return;
     setIsFixing(true);
     try {
-      const idToken = await user.getIdToken();
-      
-      let functionName: string;
-      let payload: any;
-      let apiKind: 'movie' | 'tv';
-  
-      if (item.kind === 'show') {
-        apiKind = 'tv';
-        functionName = 'tmdbFixShow';
-        payload = {
-          uid: user.uid,
-          oldShowId: Number(item.id),
-          newShowId: selectedMatch.tmdbId,
-        };
-      } else {
-        apiKind = item.kind === 'movie' ? 'movie' : 'tv';
-        functionName = 'tmdbFixMatch';
-        payload = {
-          collection: item.collectionPath,
-          docId: item.id,
-          kind: apiKind,
-          tmdbId: selectedMatch.tmdbId,
-          updateDisplayTitle: true, 
-        };
-      }
-  
-      await callFunction(functionName, payload, idToken);
-      
-      toast({ title: "Match Updated", description: `Successfully re-matched with "${selectedMatch.title}".` });
-  
-      if (item.kind !== 'show') {
-        const patch: Partial<any> = {};
-        const newTitle = selectedMatch.title;
-        patch.displayTitle = newTitle;
-        patch.normalizedTitle = newTitle;
+        const idToken = await user.getIdToken();
         
-        onApplied?.(item.id, patch);
-      } else {
-        router.refresh();
-      }
-  
-      onClose();
+        let functionName: string;
+        let payload: any;
+
+        if (item.kind === 'show') {
+            functionName = 'tmdbFixMatch';
+            payload = {
+                collection: item.collectionPath,
+                docId: item.id,
+                kind: 'tv', // The backend function expects 'tv' for shows
+                tmdbId: selectedMatch.tmdbId,
+                updateDisplayTitle: true,
+            };
+        } else {
+            const apiKind = item.kind === 'movie' ? 'movie' : 'tv';
+            functionName = 'tmdbFixMatch';
+            payload = {
+                collection: item.collectionPath,
+                docId: item.id,
+                kind: apiKind,
+                tmdbId: selectedMatch.tmdbId,
+                updateDisplayTitle: true,
+            };
+        }
+
+        await callFunction(functionName, payload, idToken);
+
+        toast({ title: "Match Updated", description: `Successfully re-matched with "${selectedMatch.title}".` });
+
+        // For shows, a full refresh is safer to catch any downstream changes.
+        // For movies/episodes, a local patch is sufficient.
+        if (item.kind === 'show') {
+            router.refresh();
+        } else {
+            const patch: Partial<any> = {
+                displayTitle: selectedMatch.title,
+                normalizedTitle: selectedMatch.title,
+            };
+            onApplied?.(item.id, patch);
+        }
+
+        onClose();
     } catch (err: any) {
-      toast({ title: "Fix Match Failed", description: err.message, variant: 'destructive' });
+        toast({ title: "Fix Match Failed", description: err.message, variant: 'destructive' });
     } finally {
-      setIsFixing(false);
+        setIsFixing(false);
     }
-  };
+};
 
   const handleManualSet = async (type: 'poster'|'backdrop'|'video', value: string) => {
     if (!item || !user) return;
@@ -289,7 +290,7 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
 
   return (
     <Dialog open={open} onOpenChange={(isOpen) => !isFixing && onClose()}>
-      <DialogContent className="max-w-4xl">
+      <DialogContent className="max-w-4xl h-[85vh] flex flex-col">
         <DialogHeader>
           <DialogTitle>Edit Media</DialogTitle>
           <DialogDescription>
@@ -298,9 +299,9 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
           </DialogDescription>
         </DialogHeader>
 
-        <div className="grid md:grid-cols-2 gap-6 pt-4">
+        <div className="grid md:grid-cols-2 gap-6 flex-1 min-h-0 h-full">
           {/* Left Column: Matching */}
-          <div className="flex flex-col gap-4">
+          <div className="flex flex-col gap-4 h-full">
             <form onSubmit={handleSearch} className="flex gap-2">
               <Input
                 value={searchQuery}
@@ -318,7 +319,7 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
               </Button>
             </form>
 
-            <ScrollArea className="h-[412px] rounded-md border">
+            <ScrollArea className="flex-1 h-full rounded-md border">
               <div className="p-2 space-y-1">
                 {isSearching && searchResults.length === 0 ? (
                   <div className="flex justify-center py-4">
@@ -370,8 +371,8 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
           </div>
 
           {/* Right Column: Artwork Galleries */}
-          <div className="flex flex-col gap-4">
-            <Tabs defaultValue="posters" className="w-full">
+          <div className="flex flex-col gap-4 h-full">
+            <Tabs defaultValue="posters" className="w-full flex-1 flex flex-col min-h-0">
               <TabsList>
                 <TabsTrigger value="posters">
                   <ImageIcon className="mr-2" /> Posters
@@ -383,7 +384,7 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
                   <Video className="mr-2" /> Trailers
                 </TabsTrigger>
               </TabsList>
-              <div className="pt-4 min-h-[360px]">
+              <div className="pt-4 flex-1 min-h-0">
                 {mediaLoading && (
                   <div className="flex items-center justify-center h-full">
                     <Loader2 className="animate-spin text-muted-foreground" />
@@ -391,8 +392,8 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
                 )}
                 {!mediaLoading && mediaData && (
                   <>
-                    <TabsContent value="posters">
-                      <ScrollArea className="h-[360px]">
+                    <TabsContent value="posters" className="h-full m-0">
+                      <ScrollArea className="h-full">
                         <div className="grid grid-cols-4 gap-2 pr-4">
                           {mediaData.posters.map((p) => (
                             <button
@@ -420,8 +421,8 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
                         </div>
                       </ScrollArea>
                     </TabsContent>
-                    <TabsContent value="backdrops">
-                      <ScrollArea className="h-[360px]">
+                    <TabsContent value="backdrops" className="h-full m-0">
+                      <ScrollArea className="h-full">
                         <div className="grid grid-cols-2 gap-2 pr-4">
                           {mediaData.backdrops.map((b) => (
                             <button
@@ -449,8 +450,8 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
                         </div>
                       </ScrollArea>
                     </TabsContent>
-                    <TabsContent value="trailers">
-                      <ScrollArea className="h-[360px]">
+                    <TabsContent value="trailers" className="h-full m-0">
+                      <ScrollArea className="h-full">
                         <div className="space-y-2 pr-4">
                           {mediaData.videos.map((v) => {
                             const videoUrl = `https://www.youtube.com/watch?v=${v.key}`;
@@ -501,19 +502,19 @@ export function MediaEditModal({ open, onClose, item, onApplied }: MediaEditModa
                 )}
               </div>
             </Tabs>
-             <div className="flex justify-end gap-2 pt-2">
-                <Button variant="outline" onClick={onClose} disabled={isFixing}>
-                    Cancel
-                </Button>
-                <Button
-                    onClick={handleConfirmFix}
-                    disabled={!selectedMatch || isFixing}
-                >
-                    {isFixing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                    Update Media
-                </Button>
-            </div>
           </div>
+        </div>
+         <div className="flex justify-end gap-2 pt-4">
+            <Button variant="outline" onClick={onClose} disabled={isFixing}>
+                Cancel
+            </Button>
+            <Button
+                onClick={handleConfirmFix}
+                disabled={!selectedMatch || isFixing}
+            >
+                {isFixing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Update Media
+            </Button>
         </div>
       </DialogContent>
     </Dialog>
