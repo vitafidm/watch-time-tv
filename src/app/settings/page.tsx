@@ -17,6 +17,7 @@ import ProtectedRoute from '@/components/ProtectedRoute';
 import ServerConnectForm from '@/components/ServerConnectForm';
 import NasActions from '@/components/NasActions';
 import { Separator } from '@/components/ui/separator';
+import { LibraryMaintenance } from '@/components/LibraryMaintenance';
 
 function ServerStatusBadge({ status }: { status: ServerDoc['status'] }) {
     const variant = status === 'linked' ? 'default' : status === 'pending' ? 'secondary' : 'destructive';
@@ -119,6 +120,10 @@ function Settings() {
         <ServerConnectForm />
         <NasActions />
       </div>
+
+      <Separator />
+
+      <LibraryMaintenance />
 
     </div>
   );
