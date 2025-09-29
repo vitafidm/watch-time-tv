@@ -63,7 +63,8 @@ export function LibraryMaintenance() {
         }));
 
         if (response.nextCursor) {
-          await new Promise(resolve => setTimeout(resolve, 1500));
+          const delay = Number(response.retryAfterMs) || 11000;
+          await new Promise(r => setTimeout(r, delay));
           return runScan(response.nextCursor, token);
         }
       };
