@@ -1,4 +1,5 @@
 import * as admin from "firebase-admin";
+import * as functions from "firebase-functions";
 import * as crypto from "crypto";
 import fetch from "node-fetch";
 import { z } from "zod";
@@ -29,13 +30,13 @@ type CacheDoc = {
   backdropPath?: string | null;
   voteAverage?: number | null;
   language?: string | null;
-  // allow either a concrete timestamp (read) or a server timestamp (write)
+  // Firestore Timestamp when read OR server timestamp when written
   cachedAt: FirebaseFirestore.Timestamp | FirebaseFirestore.FieldValue;
 };
 
 type SearchHit = { id: number; tmdbType: "movie" | "tv" };
 
-function cacheKey(type: "movie"|"episode", title: string, year?: number) {
+function cacheKey(type: "movie" | "episode", title: string, year?: number) {
   const base = `${type === "episode" ? "tv" : "movie"}:${title.trim().toLowerCase()}:${year ?? ""}`;
   return crypto.createHash("sha1").update(base).digest("hex").slice(0, 40);
 }
@@ -47,7 +48,7 @@ function pickBestImage(path?: string | null): string | null {
 
 async function tmdbSearch(
   apiKey: string,
-  type: "movie"|"episode",
+  type: "movie" | "episode",
   title: string,
   year?: number
 ): Promise<SearchHit | null> {
@@ -66,7 +67,7 @@ async function tmdbSearch(
   return { id: first.id, tmdbType: isTV ? "tv" : "movie" };
 }
 
-async function tmdbDetails(apiKey: string, tmdbType: "movie"|"tv", id: number) {
+async function tmdbDetails(apiKey: string, tmdbType: "movie" | "tv", id: number) {
   const url = new URL(`${TMDB_BASE}/${tmdbType}/${id}`);
   url.searchParams.set("api_key", apiKey);
   url.searchParams.set("append_to_response", "credits");
@@ -76,25 +77,33 @@ async function tmdbDetails(apiKey: string, tmdbType: "movie"|"tv", id: number) {
 }
 
 export async function tmdbEnrichFlow(uid: string, rawBody: unknown) {
+  // Validate input
   const parsed = EnrichBodySchema.safeParse(rawBody);
   if (!parsed.success) {
     const e = new Error(JSON.stringify(parsed.error.issues));
     (e as any).code = "invalid-argument";
     throw e;
   }
-  if (!process.env.TMDB_API_KEY) {
+
+  // ---- API key loading: functions config first, env fallback ----
+  const cfgKey = (functions.config?.().tmdb?.api_key) as string | undefined;
+  const envKey = process.env.TMDB_API_KEY as string | undefined;
+  const apiKey = cfgKey || envKey;
+  if (!apiKey) {
+    functions.logger.error("TMDB API key missing", { hasConfig: !!cfgKey, hasEnv: !!envKey });
     const e = new Error("TMDB_API_KEY not set");
     (e as any).code = "failed-precondition";
     throw e;
   }
-  const apiKey = process.env.TMDB_API_KEY!;
+
   const { items } = parsed.data as EnrichBody;
 
-  // simple per-user rate limit: 1 call / 10s
+  // ---- Per-user rate limit: 1 call / 10s ----
   const rateRef = db.doc(`users/${uid}/integrations_meta/tmdbRateLimit`);
   const rateSnap = await rateRef.get();
   const now = Date.now();
   const cooldownMs = 10_000;
+
   if (rateSnap.exists) {
     const until = rateSnap.get("rateLimitedUntil")?.toDate?.() as Date | undefined;
     if (until && until.getTime() > now) {
@@ -103,12 +112,17 @@ export async function tmdbEnrichFlow(uid: string, rawBody: unknown) {
       throw e;
     }
   }
+
   await rateRef.set({
     lastCallAt: admin.firestore.FieldValue.serverTimestamp(),
     rateLimitedUntil: admin.firestore.Timestamp.fromDate(new Date(now + cooldownMs))
   }, { merge: true });
 
-  const results: Array<{ mediaId: string; status: "enriched"|"skipped"|"not_found"|"error"; message?: string }> = [];
+  const results: Array<{
+    mediaId: string;
+    status: "enriched" | "skipped" | "not_found" | "error";
+    message?: string;
+  }> = [];
 
   for (const it of items) {
     const mediaRef = db.doc(`users/${uid}/media/${it.mediaId}`);
@@ -119,15 +133,13 @@ export async function tmdbEnrichFlow(uid: string, rawBody: unknown) {
     }
     const media = mediaSnap.data() || {};
 
-    // Skip if tmdb already present & images exist
+    // Skip if already enriched with artwork present
     if (media.tmdbId && (media.posterUrl || media.backdropUrl)) {
       results.push({ mediaId: it.mediaId, status: "skipped" });
       continue;
     }
 
     const key = cacheKey(it.type, it.title, it.year);
-
-    // Fixed: valid collection/doc path
     const cacheRef = db.collection(`users/${uid}/integrations_cache_tmdb`).doc(key);
 
     let cached: CacheDoc | null = await cacheRef.get().then(s => s.exists ? s.data() as CacheDoc : null);
@@ -140,6 +152,7 @@ export async function tmdbEnrichFlow(uid: string, rawBody: unknown) {
 
     try {
       if (!cached || !fresh) {
+        // Search by title (episodes => TV)
         const search = await tmdbSearch(apiKey, it.type, it.title, it.year);
         if (!search) {
           results.push({ mediaId: it.mediaId, status: "not_found" });
@@ -161,7 +174,7 @@ export async function tmdbEnrichFlow(uid: string, rawBody: unknown) {
 
         const toWrite: CacheDoc = {
           tmdbId: details.id,
-          tmdbType: search.tmdbType,                // <- "movie" | "tv"
+          tmdbType: search.tmdbType, // "movie" | "tv"
           overview,
           genres,
           releaseDate,
@@ -182,9 +195,10 @@ export async function tmdbEnrichFlow(uid: string, rawBody: unknown) {
         continue;
       }
 
+      // Merge write onto media doc (do not touch addedAt)
       const payload = {
         tmdbId: cached.tmdbId,
-        tmdbType: cached.tmdbType,
+        tmdbType: cached.tmdbType,                            // "movie" or "tv"
         overview: cached.overview ?? media.overview ?? null,
         genres: cached.genres ?? media.genres ?? null,
         releaseDate: cached.releaseDate ?? media.releaseDate ?? null,
@@ -206,14 +220,14 @@ export async function tmdbEnrichFlow(uid: string, rawBody: unknown) {
   return { results };
 }
 
-// Scheduled sweep for missing metadata
+// Optional periodic sweep (unchanged)
 export async function tmdbBackfillSweep() {
   const snap = await db.collectionGroup("media")
     .where("tmdbId", "==", null)
     .limit(200)
     .get();
 
-  const byOwner: Record<string, Array<{ mediaId: string; type: "movie"|"episode"; title: string; year?: number }>> = {};
+  const byOwner: Record<string, Array<{ mediaId: string; type: "movie" | "episode"; title: string; year?: number }>> = {};
 
   for (const d of snap.docs) {
     const path = d.ref.path; // users/{uid}/media/{mediaId}
@@ -221,7 +235,7 @@ export async function tmdbBackfillSweep() {
     const uid = segs[1];
     const m = d.data() as any;
     if (!uid || !m) continue;
-    const type = (m.type === "episode" ? "episode" : "movie") as "movie"|"episode";
+    const type = (m.type === "episode" ? "episode" : "movie") as "movie" | "episode";
     const title = m.normalizedTitle || m.title || m.filename || "unknown";
     const year = m.year;
     (byOwner[uid] ||= []).push({ mediaId: d.id, type, title, year });
@@ -233,7 +247,7 @@ export async function tmdbBackfillSweep() {
       await tmdbEnrichFlow(uid, { items: chunk });
       await new Promise(r => setTimeout(r, 1000));
     } catch (e: any) {
-       console.error(`Skipping backfill for user ${uid} due to error: ${e.message}`);
+      console.error(`Skipping backfill for user ${uid} due to error: ${e.message}`);
     }
   }
 

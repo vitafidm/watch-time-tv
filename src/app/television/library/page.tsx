@@ -112,7 +112,7 @@ function TvLibrary() {
     setIsRefreshing(true);
     try {
       const idToken = await user.getIdToken();
-      await callFunction('materializeUserShows', { uid: user.uid }, idToken);
+      await callFunction('materializeUserShowsFromFolders', { uid: user.uid }, idToken);
       
       if (resetAndFetch) {
         await resetAndFetch();

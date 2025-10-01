@@ -1,0 +1,122 @@
+"use strict";
+// functions/src/flows/tmdb-enrich-episodes.ts
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.tmdbEnrichEpisodes = tmdbEnrichEpisodes;
+const admin = __importStar(require("firebase-admin"));
+const node_fetch_1 = __importDefault(require("node-fetch"));
+const zod_1 = require("zod");
+const db = admin.firestore();
+const TMDB_BASE = "https://api.themoviedb.org/3";
+const IMG_BASE = "https://image.tmdb.org/t/p/original";
+const EpisodeEnrichBodySchema = zod_1.z.object({
+    items: zod_1.z.array(zod_1.z.object({
+        mediaId: zod_1.z.string().min(1),
+        showId: zod_1.z.number().int().positive(), // tmdbShowId for parent show
+        season: zod_1.z.number().int().nonnegative(),
+        episode: zod_1.z.number().int().nonnegative(),
+    })).min(1).max(50),
+});
+function pickBestImage(path) {
+    if (!path)
+        return null;
+    return `${IMG_BASE}${path}`;
+}
+async function tmdbEpisodeDetails(apiKey, showId, season, episode) {
+    const url = new URL(`${TMDB_BASE}/tv/${showId}/season/${season}/episode/${episode}`);
+    url.searchParams.set("api_key", apiKey);
+    url.searchParams.set("append_to_response", "credits");
+    const r = await (0, node_fetch_1.default)(url.toString(), { method: "GET" });
+    if (!r.ok)
+        return null;
+    return r.json();
+}
+async function tmdbEnrichEpisodes(uid, rawBody) {
+    const parsed = EpisodeEnrichBodySchema.safeParse(rawBody);
+    if (!parsed.success) {
+        const e = new Error(JSON.stringify(parsed.error.issues));
+        e.code = "invalid-argument";
+        throw e;
+    }
+    if (!process.env.TMDB_API_KEY) {
+        const e = new Error("TMDB_API_KEY not set");
+        e.code = "failed-precondition";
+        throw e;
+    }
+    const apiKey = process.env.TMDB_API_KEY;
+    const { items } = parsed.data;
+    const results = [];
+    for (const it of items) {
+        const mediaRef = db.doc(`users/${uid}/media/${it.mediaId}`);
+        const mediaSnap = await mediaRef.get();
+        if (!mediaSnap.exists) {
+            results.push({ mediaId: it.mediaId, status: "error", message: "episode not found" });
+            continue;
+        }
+        const media = mediaSnap.data() || {};
+        try {
+            const details = await tmdbEpisodeDetails(apiKey, it.showId, it.season, it.episode);
+            if (!details) {
+                results.push({ mediaId: it.mediaId, status: "not_found" });
+                continue;
+            }
+            const payload = {
+                title: details.name || media.title || null,
+                overview: details.overview || media.overview || null,
+                stillUrl: pickBestImage(details.still_path) ?? media.stillUrl ?? null,
+                airDate: details.air_date || media.airDate || null,
+                season: it.season,
+                episode: it.episode,
+                tmdbShowId: it.showId,
+                tmdbEpisodeId: details.id,
+                cast: (details.credits?.cast || []).slice(0, 10).map((c) => ({
+                    name: c.name,
+                    character: c.character,
+                    profileUrl: pickBestImage(c.profile_path),
+                })),
+                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            };
+            await mediaRef.set(payload, { merge: true });
+            results.push({ mediaId: it.mediaId, status: "enriched" });
+        }
+        catch (err) {
+            results.push({ mediaId: it.mediaId, status: "error", message: err?.message || "TMDB error" });
+        }
+    }
+    return { results };
+}

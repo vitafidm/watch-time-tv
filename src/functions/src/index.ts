@@ -11,6 +11,7 @@ import { agentClaimFlow } from "./flows/agent-claim-flow";
 import { agentIngestFlow } from "./flows/agent-ingest-flow";
 import { playbackReportFlow } from "./flows/playback-report-flow";
 import { tmdbEnrichFlow, tmdbBackfillSweep } from "./flows/tmdb-enrich-flow";
+import { tmdbEnrichEpisodes } from "./flows/tmdb-enrich-episodes";
 
 // HTTP handlers (default exports)
 import tmdbFixMatch from "./tmdbFixMatch";
@@ -20,6 +21,8 @@ import tmdbMedia from "./tmdbMedia";
 import materializeUserShows from "./materializeUserShows";
 import tmdbFixShow from "./tmdbFixShow";
 import tmdbBackfillMissing from "./tmdbBackfill";
+import materializeUserShowsFromFolders from "./materializeUserShowsFromFolders";
+import tmdbEnrichShows from "./tmdbEnrichShows";
 
 
 // (Optional, harmless if called again thanks to apps.length guard)
@@ -142,6 +145,43 @@ exports.tmdbEnrich = functions.https.onRequest(async (req, res) => {
   });
 });
 
+
+exports.tmdbEnrichEpisodes = functions.https.onRequest(async (req, res) => {
+  return corsHandler(req, res, async () => {
+    try {
+      if (req.method !== "POST") {
+        return res.status(405).json({ error: { status: "METHOD_NOT_ALLOWED" } });
+      }
+
+      const hdr = req.headers.authorization || "";
+      if (!hdr.startsWith("Bearer ")) {
+        return res.status(401).json({ error: { status: "UNAUTHENTICATED" } });
+      }
+      const idToken = hdr.substring(7);
+      const decoded = await admin.auth().verifyIdToken(idToken).catch(() => null);
+      if (!decoded?.uid) {
+        return res.status(401).json({ error: { status: "UNAUTHENTICATED" } });
+      }
+
+      const out = await tmdbEnrichEpisodes(decoded.uid, req.body);
+      return res.status(200).json(out);
+    } catch (e: any) {
+      const code = e?.code;
+      if (code === "invalid-argument") {
+        return res.status(400).json({ error: { status: "INVALID_ARGUMENT", message: e.message } });
+      }
+      if (code === "failed-precondition") {
+        return res.status(412).json({ error: { status: "FAILED_PRECONDITION", message: e.message } });
+      }
+      functions.logger.error("tmdbEnrichEpisodes error", e);
+      return res.status(500).json({ error: { status: "INTERNAL", message: e.message } });
+    }
+  });
+});
+
+
+
+
 /*
 exports.tmdbBackfill = functions.pubsub
   .schedule("every 60 minutes")
@@ -163,3 +203,5 @@ exports.tmdbManualSet = tmdbManualSet;
 exports.tmdbMedia = tmdbMedia;
 exports.materializeUserShows = materializeUserShows;
 exports.tmdbFixShow = tmdbFixShow;
+exports.materializeUserShowsFromFolders = materializeUserShowsFromFolders;
+exports.tmdbEnrichShows = tmdbEnrichShows;

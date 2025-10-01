@@ -39,6 +39,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.tmdbEnrichFlow = tmdbEnrichFlow;
 exports.tmdbBackfillSweep = tmdbBackfillSweep;
 const admin = __importStar(require("firebase-admin"));
+const functions = __importStar(require("firebase-functions"));
 const crypto = __importStar(require("crypto"));
 const node_fetch_1 = __importDefault(require("node-fetch"));
 const zod_1 = require("zod");
@@ -90,20 +91,25 @@ async function tmdbDetails(apiKey, tmdbType, id) {
     return r.json();
 }
 async function tmdbEnrichFlow(uid, rawBody) {
+    // Validate input
     const parsed = EnrichBodySchema.safeParse(rawBody);
     if (!parsed.success) {
         const e = new Error(JSON.stringify(parsed.error.issues));
         e.code = "invalid-argument";
         throw e;
     }
-    if (!process.env.TMDB_API_KEY) {
+    // ---- API key loading: functions config first, env fallback ----
+    const cfgKey = (functions.config?.().tmdb?.api_key);
+    const envKey = process.env.TMDB_API_KEY;
+    const apiKey = cfgKey || envKey;
+    if (!apiKey) {
+        functions.logger.error("TMDB API key missing", { hasConfig: !!cfgKey, hasEnv: !!envKey });
         const e = new Error("TMDB_API_KEY not set");
         e.code = "failed-precondition";
         throw e;
     }
-    const apiKey = process.env.TMDB_API_KEY;
     const { items } = parsed.data;
-    // simple per-user rate limit: 1 call / 10s
+    // ---- Per-user rate limit: 1 call / 10s ----
     const rateRef = db.doc(`users/${uid}/integrations_meta/tmdbRateLimit`);
     const rateSnap = await rateRef.get();
     const now = Date.now();
@@ -129,13 +135,12 @@ async function tmdbEnrichFlow(uid, rawBody) {
             continue;
         }
         const media = mediaSnap.data() || {};
-        // Skip if tmdb already present & images exist
+        // Skip if already enriched with artwork present
         if (media.tmdbId && (media.posterUrl || media.backdropUrl)) {
             results.push({ mediaId: it.mediaId, status: "skipped" });
             continue;
         }
         const key = cacheKey(it.type, it.title, it.year);
-        // Fixed: valid collection/doc path
         const cacheRef = db.collection(`users/${uid}/integrations_cache_tmdb`).doc(key);
         let cached = await cacheRef.get().then(s => s.exists ? s.data() : null);
         // 30-day cache TTL
@@ -144,6 +149,7 @@ async function tmdbEnrichFlow(uid, rawBody) {
             (Date.now() - cached.cachedAt.toDate().getTime() < 30 * 24 * 3600 * 1000);
         try {
             if (!cached || !fresh) {
+                // Search by title (episodes => TV)
                 const search = await tmdbSearch(apiKey, it.type, it.title, it.year);
                 if (!search) {
                     results.push({ mediaId: it.mediaId, status: "not_found" });
@@ -162,7 +168,7 @@ async function tmdbEnrichFlow(uid, rawBody) {
                 const language = details.original_language || null;
                 const toWrite = {
                     tmdbId: details.id,
-                    tmdbType: search.tmdbType, // <- "movie" | "tv"
+                    tmdbType: search.tmdbType, // "movie" | "tv"
                     overview,
                     genres,
                     releaseDate,
@@ -180,9 +186,10 @@ async function tmdbEnrichFlow(uid, rawBody) {
                 results.push({ mediaId: it.mediaId, status: "error", message: "cache unavailable" });
                 continue;
             }
+            // Merge write onto media doc (do not touch addedAt)
             const payload = {
                 tmdbId: cached.tmdbId,
-                tmdbType: cached.tmdbType,
+                tmdbType: cached.tmdbType, // "movie" or "tv"
                 overview: cached.overview ?? media.overview ?? null,
                 genres: cached.genres ?? media.genres ?? null,
                 releaseDate: cached.releaseDate ?? media.releaseDate ?? null,
@@ -202,7 +209,7 @@ async function tmdbEnrichFlow(uid, rawBody) {
     }
     return { results };
 }
-// Scheduled sweep for missing metadata
+// Optional periodic sweep (unchanged)
 async function tmdbBackfillSweep() {
     const snap = await db.collectionGroup("media")
         .where("tmdbId", "==", null)
