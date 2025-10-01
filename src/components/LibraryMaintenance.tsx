@@ -1,4 +1,3 @@
-
 "use client";
 
 import { useState } from 'react';
@@ -45,14 +44,11 @@ export function LibraryMaintenance() {
 
     try {
       const idToken = await user.getIdToken();
-      
-      const runScan = async (currentCursor: string | null, token: string): Promise<void> => {
-        const body = { 
-          uid: user.uid, 
-          processAll: true,
-          cursor: currentCursor 
-        };
-        const response: any = await callFunction('tmdbBackfillMissing', body, token);
+
+      // 1. Enrich Movies (existing backfill)
+      const runBackfill = async (currentCursor: string | null, token: string): Promise<void> => {
+        const body = { uid: user.uid, processAll: true, cursor: currentCursor };
+        const response: any = await callFunction("tmdbBackfillMissing", body, token);
 
         setProgress(prev => ({
           scanned: prev.scanned + (response.scanned || 0),
@@ -65,13 +61,31 @@ export function LibraryMaintenance() {
         if (response.nextCursor) {
           const delay = Number(response.retryAfterMs) || 11000;
           await new Promise(r => setTimeout(r, delay));
-          return runScan(response.nextCursor, token);
+          return runBackfill(response.nextCursor, token);
         }
       };
 
-      await runScan(null, idToken);
-      setIsComplete(true);
+      await runBackfill(null, idToken);
 
+      // 2. Enrich Shows
+      const showResponse: any = await callFunction("tmdbEnrichShows", { uid: user.uid }, idToken);
+      setProgress(prev => ({
+        ...prev,
+        scanned: prev.scanned + (showResponse.scanned || 0),
+        enriched: prev.enriched + (showResponse.enriched || 0),
+        errors: prev.errors + (showResponse.errors || 0),
+      }));
+
+      // 3. Enrich Episodes
+      const episodeResponse: any = await callFunction("tmdbEnrichEpisodes", { uid: user.uid }, idToken);
+      setProgress(prev => ({
+        ...prev,
+        scanned: prev.scanned + (episodeResponse.scanned || 0),
+        enriched: prev.enriched + (episodeResponse.enriched || 0),
+        errors: prev.errors + (episodeResponse.errors || 0),
+      }));
+
+      setIsComplete(true);
     } catch (err: any) {
       console.error("Deep scan failed:", err);
       setError(err.message || "An unknown error occurred during the scan.");
@@ -86,29 +100,39 @@ export function LibraryMaintenance() {
         <CardTitle>Library Maintenance</CardTitle>
         <CardDescription>
           This tool performs a deep scan of your entire library to find and enrich items
-          that are missing metadata from TMDB. This is useful for fixing incorrect show groupings
-          or missing movie posters.
+          that are missing metadata from TMDB. This includes both movies and TV shows.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         <Button onClick={handleStartScan} disabled={isScanning}>
-          {isScanning ? (
-            <RefreshCw className="animate-spin" />
-          ) : (
-            <Search />
-          )}
-          {isScanning ? 'Scanning...' : 'Start Deep Scan'}
+          {isScanning ? <RefreshCw className="animate-spin" /> : <Search />}
+          {isScanning ? "Scanning..." : "Start Deep Scan"}
         </Button>
 
         {(isScanning || isComplete || error) && (
           <div className="p-4 border rounded-lg bg-muted/50 space-y-2">
             <h4 className="font-semibold text-sm">Scan Progress</h4>
             <div className="grid grid-cols-2 md:grid-cols-3 gap-x-4 gap-y-1 text-sm text-muted-foreground">
-              <p>Items Scanned: <span className="font-medium text-foreground">{progress.scanned}</span></p>
-              <p>Enriched: <span className="font-medium text-green-400">{progress.enriched}</span></p>
-              <p>Skipped: <span className="font-medium text-foreground">{progress.skipped}</span></p>
-              <p>Not Found: <span className="font-medium text-amber-400">{progress.notFound}</span></p>
-              <p>Errors: <span className="font-medium text-red-400">{progress.errors}</span></p>
+              <p>
+                Items Scanned:{" "}
+                <span className="font-medium text-foreground">{progress.scanned}</span>
+              </p>
+              <p>
+                Enriched:{" "}
+                <span className="font-medium text-green-400">{progress.enriched}</span>
+              </p>
+              <p>
+                Skipped:{" "}
+                <span className="font-medium text-foreground">{progress.skipped}</span>
+              </p>
+              <p>
+                Not Found:{" "}
+                <span className="font-medium text-amber-400">{progress.notFound}</span>
+              </p>
+              <p>
+                Errors:{" "}
+                <span className="font-medium text-red-400">{progress.errors}</span>
+              </p>
             </div>
           </div>
         )}
@@ -122,14 +146,17 @@ export function LibraryMaintenance() {
         )}
 
         {isComplete && !error && (
-            <Alert variant="default" className="bg-green-500/10 border-green-500/20 text-green-300">
-                <CheckCircle className="text-green-400" />
-                <AlertTitle>Scan Complete</AlertTitle>
-                <AlertDescription>
-                    The library maintenance scan has finished successfully. You may now need to
-                    refresh your TV library to see the changes.
-                </AlertDescription>
-            </Alert>
+          <Alert
+            variant="default"
+            className="bg-green-500/10 border-green-500/20 text-green-300"
+          >
+            <CheckCircle className="text-green-400" />
+            <AlertTitle>Scan Complete</AlertTitle>
+            <AlertDescription>
+              The library maintenance scan has finished successfully. You may now need to
+              refresh your TV library to see the changes.
+            </AlertDescription>
+          </Alert>
         )}
       </CardContent>
     </Card>

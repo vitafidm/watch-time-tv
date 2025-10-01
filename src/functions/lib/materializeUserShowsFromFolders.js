@@ -60,13 +60,41 @@ function showIdFromFolder(folderName) {
     const norm = normalizeTitle(folderName);
     return crypto_1.default.createHash("sha1").update(norm).digest("hex").slice(0, 40);
 }
-function parentFolderFromPath(path) {
+/**
+ * Given a full file path, return the *show-level* folder info:
+ * - showFolderName: the folder name that represents the show
+ * - showFolderPath: the full path up to that folder (not including the file), e.g. /.../TV/Animaniacs
+ *
+ * Handles both:
+ *   /TV/Animaniacs/Animaniacs.S04E06.mp4               -> showFolderName = Animaniacs
+ *   /TV/Animaniacs/Season 1/Animaniacs.S01E01.mp4      -> showFolderName = Animaniacs
+ *   /TV/Bridgerton/S02/Bridgerton.S02E01.mkv           -> showFolderName = Bridgerton
+ */
+function extractShowFolder(path) {
     if (!path || typeof path !== "string")
         return null;
+    // Split and drop empty parts
     const parts = path.split("/").filter(Boolean);
     if (parts.length < 2)
         return null;
-    return parts[parts.length - 2] || null;
+    // last segment is file name
+    const fileName = parts[parts.length - 1];
+    const parent = parts[parts.length - 2] || "";
+    const grandparent = parts.length >= 3 ? parts[parts.length - 3] : "";
+    // Season folder regex:
+    //  - "Season 1", "Season 01", "Season 1 (1080p)"
+    //  - "S01", "S1"
+    //  - "Series 2"
+    const seasonRegex = /^(season\s*\d+(\s*\(.*\))?|s\d+|series\s*\d+)$/i;
+    let showFolderName = parent;
+    let showFolderPathParts = parts.slice(0, -1); // default: up to parent folder
+    if (seasonRegex.test(parent) && grandparent) {
+        // If the immediate parent is a season folder, step up a level for show folder
+        showFolderName = grandparent;
+        showFolderPathParts = parts.slice(0, -2); // up to grandparent
+    }
+    const showFolderPath = "/" + showFolderPathParts.join("/");
+    return { showFolderName, showFolderPath };
 }
 function toTimestamp(v) {
     if (!v)
@@ -136,9 +164,11 @@ exports.default = functions
                 for (const doc of snap.docs) {
                     const data = doc.data() || {};
                     const path = data.path || "";
-                    const folderName = parentFolderFromPath(path);
-                    if (!folderName)
+                    const extracted = extractShowFolder(path);
+                    if (!extracted)
                         continue; // skip weird paths
+                    const folderName = extracted.showFolderName;
+                    const showFolderPath = extracted.showFolderPath;
                     const showId = showIdFromFolder(folderName);
                     const serverId = typeof data.serverId === "string" ? data.serverId : null;
                     const bucket = byShowId.get(showId) || {
@@ -147,7 +177,7 @@ exports.default = functions
                         episodeDocs: [],
                         lastAddedAt: null,
                         serverId,
-                        exampleFolderPath: path.split("/").slice(0, -1).join("/"),
+                        exampleShowFolderPath: showFolderPath,
                     };
                     // compute latest addedAt for this bucket (fallback to updatedAt)
                     const addedAtTs = toTimestamp(data.addedAt) || toTimestamp(data.updatedAt);
@@ -169,7 +199,7 @@ exports.default = functions
                         title: showData.title || bucket.folderName, // keep existing nice title if present
                         titleCandidate: bucket.folderName, // raw folder
                         normalizedTitle: normalizeTitle(bucket.folderName),
-                        folderPath: showData.folderPath || bucket.exampleFolderPath || null,
+                        folderPath: showData.folderPath || bucket.exampleShowFolderPath || null,
                         serverId: showData.serverId || bucket.serverId || null,
                         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
                     };
