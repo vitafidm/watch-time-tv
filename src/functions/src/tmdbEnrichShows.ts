@@ -1,4 +1,3 @@
-
 // functions/tmdbEnrichShows.ts
 import * as functions from "firebase-functions";
 import * as admin from "firebase-admin";
@@ -74,7 +73,7 @@ const handler = async (req: functions.https.Request, res: functions.Response) =>
       }
       const apiKey = process.env.TMDB_API_KEY;
 
-      let q = db.collection(`users/${uid}/shows`).orderBy(admin.firestore.FieldPath.documentId());
+      let q = db.collection(`users/${uid}/shows`).where('tmdbId', '==', null).orderBy(admin.firestore.FieldPath.documentId());
       if (startAfterId) q = q.startAfter(startAfterId);
       const snap = await q.limit(batchSize).get();
 
