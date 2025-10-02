@@ -73,7 +73,7 @@ async function tmdbShowDetails(apiKey, id) {
     return r.json();
 }
 /**
- * POST body: { uid: string, batchSize?: number, startAfterId?: string }
+ * POST body: { batchSize?: number, startAfterId?: string }
  * Returns: { processed:number, enriched:number, skipped:number, notFound:number, nextStartAfterId?:string }
  */
 const handler = async (req, res) => {
@@ -82,14 +82,25 @@ const handler = async (req, res) => {
             if (req.method !== "POST") {
                 return res.status(405).json({ error: "Method Not Allowed" });
             }
+            // 1. Authentication
+            const authHeader = req.headers.authorization;
+            if (!authHeader || !authHeader.startsWith("Bearer ")) {
+                throw new functions.https.HttpsError("unauthenticated", "User must be authenticated.");
+            }
+            const idToken = authHeader.split("Bearer ")[1];
+            const decodedToken = await admin.auth().verifyIdToken(idToken);
+            const uid = decodedToken.uid;
+            if (!uid) {
+                throw new functions.https.HttpsError("unauthenticated", "Invalid ID token.");
+            }
+            // 2. Safe Input Handling
+            const { batchSize = 20, startAfterId } = (req.body || {});
+            // 3. Robust Logging
+            functions.logger.info("tmdbEnrichShows called", { uid, body: req.body });
             if (!process.env.TMDB_API_KEY) {
-                return res.status(500).json({ error: "TMDB_API_KEY not set" });
+                throw new functions.https.HttpsError("failed-precondition", "TMDB_API_KEY not set");
             }
             const apiKey = process.env.TMDB_API_KEY;
-            const { uid, batchSize = 20, startAfterId } = req.body || {};
-            if (!uid || typeof uid !== "string") {
-                return res.status(400).json({ error: "Missing uid" });
-            }
             let q = db.collection(`users/${uid}/shows`).orderBy(admin.firestore.FieldPath.documentId());
             if (startAfterId)
                 q = q.startAfter(startAfterId);
@@ -139,9 +150,10 @@ const handler = async (req, res) => {
                     enriched++;
                 }
                 catch (err) {
-                    functions.logger.error("tmdbEnrichShows error", {
+                    // Log the full error for better debugging
+                    functions.logger.error("tmdbEnrichShows inner error", {
                         showId: doc.id,
-                        error: err?.message || String(err),
+                        error: err,
                     });
                     notFound++;
                 }
@@ -151,8 +163,12 @@ const handler = async (req, res) => {
             return res.json({ processed, enriched, skipped, notFound, nextStartAfterId });
         }
         catch (err) {
-            functions.logger.error("tmdbEnrichShows fatal", err);
-            return res.status(500).json({ error: err?.message || "Internal error" });
+            // Log the full error object for the entire handler
+            functions.logger.error("tmdbEnrichShows fatal", { error: err });
+            const code = err.code || 'internal';
+            const message = err.message || 'An internal error occurred.';
+            const httpStatus = code === 'unauthenticated' || code === 'permission-denied' ? 403 : code === 'invalid-argument' ? 400 : 500;
+            return res.status(httpStatus).json({ error: { code, message } });
         }
     });
 };

@@ -42,47 +42,41 @@ export function LibraryMaintenance() {
     setError(null);
     setProgress(INITIAL_PROGRESS);
 
+    // This recursive function handles the paging logic.
+    const runScan = async (currentCursor: string | null): Promise<void> => {
+      // Always get a fresh token before each call.
+      const idToken = await user.getIdToken(true);
+      const body = { uid: user.uid, processAll: true, cursor: currentCursor };
+      const response: any = await callFunction("tmdbBackfillMissing", body, idToken);
+
+      setProgress(prev => ({
+        scanned: prev.scanned + (response.scanned || 0),
+        enriched: prev.enriched + (response.enriched || 0),
+        notFound: prev.notFound + (response.notFound || 0),
+        errors: prev.errors + (response.errors || 0),
+        skipped: prev.skipped + (response.skipped || 0),
+      }));
+
+      // If there's a next page, wait for the recommended delay and continue.
+      if (response.nextCursor) {
+        const delay = Number(response.retryAfterMs) || 11000;
+        await new Promise(r => setTimeout(r, delay));
+        return runScan(response.nextCursor);
+      }
+    };
+
     try {
-      const idToken = await user.getIdToken();
+      // Start the first scan.
+      await runScan(null);
 
-      // 1. Enrich Movies (existing backfill)
-      const runBackfill = async (currentCursor: string | null, token: string): Promise<void> => {
-        const body = { uid: user.uid, processAll: true, cursor: currentCursor };
-        const response: any = await callFunction("tmdbBackfillMissing", body, token);
-
-        setProgress(prev => ({
-          scanned: prev.scanned + (response.scanned || 0),
-          enriched: prev.enriched + (response.enriched || 0),
-          notFound: prev.notFound + (response.notFound || 0),
-          errors: prev.errors + (response.errors || 0),
-          skipped: prev.skipped + (response.skipped || 0),
-        }));
-
-        if (response.nextCursor) {
-          const delay = Number(response.retryAfterMs) || 11000;
-          await new Promise(r => setTimeout(r, delay));
-          return runBackfill(response.nextCursor, token);
-        }
-      };
-
-      await runBackfill(null, idToken);
-
-      // 2. Enrich Shows
+      // Now that movies are done, enrich TV shows.
+      const idToken = await user.getIdToken(true);
       const showResponse: any = await callFunction("tmdbEnrichShows", { uid: user.uid }, idToken);
       setProgress(prev => ({
         ...prev,
         scanned: prev.scanned + (showResponse.scanned || 0),
         enriched: prev.enriched + (showResponse.enriched || 0),
         errors: prev.errors + (showResponse.errors || 0),
-      }));
-
-      // 3. Enrich Episodes
-      const episodeResponse: any = await callFunction("tmdbEnrichEpisodes", { uid: user.uid }, idToken);
-      setProgress(prev => ({
-        ...prev,
-        scanned: prev.scanned + (episodeResponse.scanned || 0),
-        enriched: prev.enriched + (episodeResponse.enriched || 0),
-        errors: prev.errors + (episodeResponse.errors || 0),
       }));
 
       setIsComplete(true);
