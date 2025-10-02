@@ -91,6 +91,7 @@ export default functions
         // Read just one small page (<= batchSize)
         const coll = db.collection(`users/${uid}/media`);
         let query = coll
+          .where("tmdbId", "==", null)
           .orderBy("updatedAt", "desc")
           .orderBy(admin.firestore.FieldPath.documentId())
           .limit(effectiveLimit);

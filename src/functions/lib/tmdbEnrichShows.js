@@ -101,7 +101,7 @@ const handler = async (req, res) => {
                 throw new functions.https.HttpsError("failed-precondition", "TMDB_API_KEY not set");
             }
             const apiKey = process.env.TMDB_API_KEY;
-            let q = db.collection(`users/${uid}/shows`).orderBy(admin.firestore.FieldPath.documentId());
+            let q = db.collection(`users/${uid}/shows`).where('tmdbId', '==', null).orderBy(admin.firestore.FieldPath.documentId());
             if (startAfterId)
                 q = q.startAfter(startAfterId);
             const snap = await q.limit(batchSize).get();
