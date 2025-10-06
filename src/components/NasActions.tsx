@@ -1,7 +1,6 @@
 "use client";
 
-import { useState } from "react";
-import { useServerConfig } from "@/hooks/useServerConfig";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -10,158 +9,138 @@ import {
   CardDescription,
   CardContent,
 } from "@/components/ui/card";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Wifi, ScanLine, UploadCloud, RefreshCw, AlertCircle } from "lucide-react";
+import { RefreshCw, AlertCircle, Server } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { ENV } from "@/lib/env";
+import type { ServerDoc } from "@/lib/db.types";
+import { cn } from "@/lib/utils";
 
-function cleanBaseUrl(s?: string) {
-  return (s || "").replace(/\/+$/, "");
+interface NasActionsProps {
+  servers: ServerDoc[];
 }
 
-type Msg = { kind: "ok" | "err"; text: React.ReactNode };
-
-export default function NasActions() {
-  const { config, loading } = useServerConfig();
+export default function NasActions({ servers }: NasActionsProps) {
   const { toast } = useToast();
-  const base = cleanBaseUrl(config?.backendUrl);
-  const [busy, setBusy] = useState<string | null>(null);
-  const [msg, setMsg] = useState<Msg | null>(null);
+  const [selectedServerId, setSelectedServerId] = useState<string>("");
+  const [isSyncing, setIsSyncing] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const isBusy = !!busy;
-  const isDisabled = loading || !base || isBusy;
+  const linkedServers = servers.filter((s) => s.status === 'linked');
 
-  async function hit(path: string, init?: RequestInit) {
-    const url = `${base}${path}`;
-    const r = await fetch(url, {
-      method: "GET",
-      ...(init || {}),
-      headers: {
-        "Content-Type": "application/json",
-        ...(init?.headers || {}),
-      },
-    });
-    const t = await r.text();
-    let body: any = null;
-    try {
-      body = t ? JSON.parse(t) : null;
-    } catch {
-      body = { raw: t };
+  useEffect(() => {
+    // Pre-select the server if there's only one
+    if (linkedServers.length === 1 && !selectedServerId) {
+      setSelectedServerId(linkedServers[0].serverId);
     }
-    return { ok: r.ok, status: r.status, body, url };
-  }
-
-  async function onHealth() {
-    setBusy("health");
-    setMsg(null);
-    try {
-      const res = await hit("/health");
-      if (!res.ok) throw new Error(`Health check failed with status ${res.status}`);
-      setMsg({ kind: "ok", text: `✅ Connection to ${res.url} was successful!` });
-      toast({ title: "Connection Successful", description: "The health check passed." });
-    } catch (e: any) {
-      setMsg({ kind: "err", text: `❌ Health check failed: ${e?.message || e}` });
-      toast({ title: "Connection Failed", description: e?.message || "Could not connect to the backend.", variant: "destructive" });
-    } finally {
-      setBusy(null);
+    // Clear selection if the selected server is no longer available
+    if (selectedServerId && !linkedServers.some(s => s.serverId === selectedServerId)) {
+        setSelectedServerId("");
     }
-  }
+  }, [linkedServers, selectedServerId]);
 
-  async function onScan() {
-    setBusy("scan");
-    setMsg(null);
-    try {
-      const res = await hit("/scan", { method: "POST" });
-      if (!res.ok) throw new Error(`HTTP ${res.status}: ${JSON.stringify(res.body)}`);
-      const count = Array.isArray(res.body?.items) ? res.body.items.length : 0;
-      setMsg({ kind: "ok", text: `✅ Scan complete. Found ${count} items locally.` });
-      toast({ title: "Scan Complete", description: `Found ${count} items on your NAS.` });
-    } catch (e: any) {
-      setMsg({ kind: "err", text: `❌ Scan failed: ${e?.message || e}` });
-      toast({ title: "Scan Failed", description: e?.message || "Could not complete the scan.", variant: "destructive" });
-    } finally {
-      setBusy(null);
+  const handleSync = async () => {
+    if (!selectedServerId) {
+      setError("Please select a server to sync.");
+      return;
     }
-  }
 
-  async function onPush() {
-    setBusy("push");
-    setMsg(null);
-    try {
-      const res = await hit("/push", { method: "POST" });
-
-      if (res.body?.error) {
-        throw new Error(res.body.error);
-      }
-
-      if (!res.ok) {
-        throw new Error(`Push request failed with status ${res.status}`);
-      }
-      
-      const status = res.body?.status ?? 'N/A';
-      const results = res.body?.body?.results;
-      const summary = Array.isArray(results)
-        ? `${results.length} items processed, ${results.filter((r: any) => r.status === "upserted").length} upserted.`
-        : "no per-item detail available.";
-
-      setMsg({
-        kind: "ok",
-        text: (
-          <>
-            ✅ Push to Firestore finished.
-            <br />
-            Function status: {status} ({summary})
-          </>
-        ),
+    const server = linkedServers.find(s => s.serverId === selectedServerId);
+    if (!server || !server.ip) {
+      setError("The selected server does not have a valid IP address configured.");
+      toast({
+        title: "Sync Failed",
+        description: "Selected server is missing an IP address.",
+        variant: "destructive",
       });
-      toast({ title: "Sync Complete", description: summary });
-
-    } catch (e: any) {
-      setMsg({ kind: "err", text: `❌ Sync failed: ${e?.message || e}` });
-      toast({ title: "Sync Failed", description: e?.message || "Could not sync data to Firestore.", variant: "destructive" });
-    } finally {
-      setBusy(null);
+      return;
     }
-  }
+
+    setIsSyncing(true);
+    setError(null);
+    
+    // The agent runs on port 4010 by default
+    const agentUrl = `http://${server.ip}:4010/sync`;
+
+    try {
+      toast({
+        title: "Sync Initiated",
+        description: `Asking "${server.name || server.serverId}" to scan and sync its library...`,
+      });
+
+      const response = await fetch(agentUrl, { method: "POST" });
+      const responseBody = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(responseBody.error || `Agent returned an error: ${response.status}`);
+      }
+
+      const sentCount = responseBody.sentItems || 0;
+      toast({
+        title: "Sync Complete",
+        description: `Successfully synced ${sentCount} items from your agent. Your libraries will now reflect the changes.`,
+      });
+    } catch (e: any) {
+      console.error("Sync failed:", e);
+      setError(`Failed to connect to agent at ${agentUrl}. Ensure it's running and accessible.`);
+      toast({
+        title: "Sync Failed",
+        description: e.message || "Could not connect to the agent.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsSyncing(false);
+    }
+  };
 
   return (
     <Card>
       <CardHeader>
-        <CardTitle>NAS Actions</CardTitle>
+        <CardTitle>Library Sync</CardTitle>
         <CardDescription>
-          Manually trigger actions on your connected Direct NAS backend.
-          <span className="block text-xs mt-1 text-muted-foreground">
-            Ingest Target: <code className="font-mono bg-muted px-1 py-0.5 rounded">{ENV.AGENT_INGEST_URL || 'not set'}</code>
-          </span>
+          Trigger your connected agent to scan for new media and sync the catalog with your cloud library.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-        <div className="flex gap-2 flex-wrap">
-          <Button disabled={isDisabled} onClick={onHealth}>
-            {busy === "health" ? <RefreshCw className="mr-2 h-4 w-4 animate-spin" /> : <Wifi className="mr-2 h-4 w-4" />}
-            {busy === "health" ? "Checking…" : "Test Connection"}
-          </Button>
-          <Button disabled={isDisabled} onClick={onScan}>
-            {busy === "scan" ? <RefreshCw className="mr-2 h-4 w-4 animate-spin" /> : <ScanLine className="mr-2 h-4 w-4" />}
-            {busy === "scan" ? "Scanning…" : "Scan Catalog"}
-          </Button>
-          <Button disabled={isDisabled} onClick={onPush}>
-            {busy === "push" ? <RefreshCw className="mr-2 h-4 w-4 animate-spin" /> : <UploadCloud className="mr-2 h-4 w-4" />}
-            {busy === "push" ? "Syncing…" : "Sync to Firestore"}
-          </Button>
-        </div>
-
-        {!base && !isBusy && (
-          <p className="text-sm text-muted-foreground">
-            Save a valid Backend URL in the form above to enable actions.
-          </p>
+        {linkedServers.length > 0 ? (
+          <div className="space-y-4">
+            <div className={cn("grid gap-2", linkedServers.length === 1 && "grid-cols-[1fr,auto]")}>
+                 <Select value={selectedServerId} onValueChange={setSelectedServerId} disabled={isSyncing}>
+                    <SelectTrigger>
+                        <SelectValue placeholder="Select a server to sync..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                        {linkedServers.map((server) => (
+                        <SelectItem key={server.serverId} value={server.serverId}>
+                            {server.name || server.serverId}
+                        </SelectItem>
+                        ))}
+                    </SelectContent>
+                </Select>
+            </div>
+            <Button onClick={handleSync} disabled={!selectedServerId || isSyncing} className="w-full sm:w-auto">
+              {isSyncing ? <RefreshCw className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+              {isSyncing ? "Syncing..." : "Sync Library from Agent"}
+            </Button>
+          </div>
+        ) : (
+          <div className="flex items-center justify-center p-4 rounded-md bg-muted text-muted-foreground text-sm">
+            <Server className="mr-2 h-4 w-4" />
+            Connect an agent to enable library syncing.
+          </div>
         )}
 
-        {msg && (
-          <Alert variant={msg.kind === "ok" ? "default" : "destructive"}>
+        {error && (
+          <Alert variant="destructive">
             <AlertCircle className="h-4 w-4" />
-            <AlertTitle>{msg.kind === "ok" ? "Success" : "Error"}</AlertTitle>
-            <AlertDescription>{msg.text}</AlertDescription>
+            <AlertTitle>Error</AlertTitle>
+            <AlertDescription>{error}</AlertDescription>
           </Alert>
         )}
       </CardContent>
