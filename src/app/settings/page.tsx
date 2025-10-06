@@ -118,7 +118,7 @@ function Settings() {
 
       <div className="grid md:grid-cols-2 gap-8 items-start">
         <ServerConnectForm />
-        <NasActions />
+        <NasActions servers={servers} />
       </div>
 
       <Separator />

@@ -43,69 +43,134 @@ exports.movieDetails = movieDetails;
 exports.tvDetails = tvDetails;
 exports.posterUrl = posterUrl;
 exports.backdropUrl = backdropUrl;
+// functions/src/tmdbClient.ts
 const functions = __importStar(require("firebase-functions"));
 const node_fetch_1 = __importDefault(require("node-fetch"));
-const TMDB_BASE_URL = 'https://api.themoviedb.org/3';
-const IMG_BASE_URL = 'https://image.tmdb.org/t/p/';
-// Helper to pause execution
-const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+const TMDB_BASE_URL = "https://api.themoviedb.org/3";
+const IMG_BASE_URL = "https://image.tmdb.org/t/p/";
+// Small helper to pause
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 function getApiKey() {
+    // Prefer Functions config (production), fall back to env (local/emulator)
     try {
-        // This is the primary, recommended way for production.
-        const key = functions.config().tmdb.key;
-        if (key)
-            return key;
+        const fromConfig = functions.config()?.tmdb?.key;
+        if (fromConfig)
+            return fromConfig;
     }
-    catch (e) {
-        // This is a fallback for local testing if functions.config() is not populated.
-        // `firebase functions:config:get` does not populate process.env automatically.
-        if (process.env.TMDB_API_KEY) {
-            return process.env.TMDB_API_KEY;
-        }
+    catch {
+        // accessing functions.config() can throw in some local contexts — ignore
     }
-    throw new Error('TMDB API key not found. Set it with `firebase functions:config:set tmdb.key="YOUR_KEY"` or as TMDB_API_KEY in your local environment.');
+    const fromEnv = process.env.TMDB_API_KEY;
+    if (fromEnv)
+        return fromEnv;
+    throw new Error("TMDB API key not found. Set with `firebase functions:config:set tmdb.key=\"YOUR_KEY\"` " +
+        "or set TMDB_API_KEY in your environment.");
 }
-async function tmdbFetch(path, params) {
+/**
+ * Core fetcher with lightweight retry/backoff for rate limits and transient failures.
+ */
+async function tmdbFetch(path, params = {}) {
     const apiKey = getApiKey();
     const url = new URL(`${TMDB_BASE_URL}/${path}`);
-    url.searchParams.set('api_key', apiKey);
-    url.searchParams.set('language', 'en-US');
-    for (const [key, value] of Object.entries(params)) {
-        url.searchParams.set(key, value);
+    url.searchParams.set("api_key", apiKey);
+    url.searchParams.set("language", "en-US");
+    for (const [k, v] of Object.entries(params)) {
+        if (v !== undefined && v !== null)
+            url.searchParams.set(k, String(v));
     }
-    await sleep(150); // Be gentle with the API
-    const response = await (0, node_fetch_1.default)(url.toString());
-    if (!response.ok) {
-        console.error(`TMDB API Error: ${response.status} for URL: ${url.toString()}`);
-        const errorBody = await response.text();
-        console.error('Error Body:', errorBody);
-        return null;
+    // Gentle pacing for normal requests
+    await sleep(150);
+    const maxAttempts = 3;
+    let attempt = 0;
+    while (attempt < maxAttempts) {
+        attempt++;
+        let res = null;
+        try {
+            res = await (0, node_fetch_1.default)(url.toString(), {
+                headers: {
+                    "Accept": "application/json",
+                    // Helps TMDB support know who you are if needed; optional:
+                    "User-Agent": "watchtime-functions/1.0",
+                },
+            });
+            // Successful
+            if (res.ok) {
+                return await res.json();
+            }
+            // Retry on 429 / 5xx
+            const status = res.status;
+            const text = await res.text().catch(() => "");
+            const retryAfter = Number(res.headers.get("retry-after")) || 0;
+            if (status === 429 || (status >= 500 && status < 600)) {
+                const backoff = retryAfter > 0
+                    ? retryAfter * 1000
+                    : Math.min(2000 * attempt, 6000); // simple backoff cap at 6s
+                functions.logger.warn("TMDB transient error; backing off", {
+                    status,
+                    attempt,
+                    backoffMs: backoff,
+                    url: url.toString(),
+                    body: text?.slice(0, 500),
+                });
+                await sleep(backoff);
+                continue;
+            }
+            // Non-retryable error
+            functions.logger.error("TMDB API error (non-retryable)", {
+                status,
+                url: url.toString(),
+                body: text?.slice(0, 1000),
+            });
+            return null;
+        }
+        catch (err) {
+            // Network/parsing error; retry a couple times
+            functions.logger.warn("TMDB fetch threw; retrying if attempts remain", {
+                attempt,
+                error: err?.message,
+                url: url.toString(),
+            });
+            await sleep(Math.min(2000 * attempt, 6000));
+            continue;
+        }
     }
-    return response.json();
+    // Exhausted attempts
+    functions.logger.error("TMDB fetch failed after retries", { url: url.toString() });
+    return null;
 }
+// ---- Convenience wrappers ----
 async function searchMovie(title, year, page = 1) {
-    const params = { query: title, include_adult: 'false', page: String(page) };
-    if (year) {
+    const params = {
+        query: title,
+        include_adult: "false",
+        page: String(page),
+    };
+    if (year)
         params.year = String(year);
-    }
-    return tmdbFetch('search/movie', params);
+    return tmdbFetch("search/movie", params);
 }
 async function searchTV(title, year, page = 1) {
-    const params = { query: title, include_adult: 'false', page: String(page) };
-    if (year) {
+    const params = {
+        query: title,
+        include_adult: "false",
+        page: String(page),
+    };
+    if (year)
         params.first_air_date_year = String(year);
-    }
-    return tmdbFetch('search/tv', params);
+    return tmdbFetch("search/tv", params);
 }
 async function movieDetails(id) {
-    return tmdbFetch(`movie/${id}`, { append_to_response: 'videos,credits,images' });
+    // includes videos/credits/images for richer Fix Match writes
+    return tmdbFetch(`movie/${id}`, { append_to_response: "videos,credits,images" });
 }
 async function tvDetails(id) {
-    return tmdbFetch(`tv/${id}`, { append_to_response: 'videos,aggregate_credits,images' });
+    // includes aggregate_credits/videos/images to align with Fix Match & enrichment parity
+    return tmdbFetch(`tv/${id}`, { append_to_response: "videos,aggregate_credits,images" });
 }
-function posterUrl(path, size = 'w500') {
+// ---- Image helpers ----
+function posterUrl(path, size = "w500") {
     return path ? `${IMG_BASE_URL}${size}${path}` : null;
 }
-function backdropUrl(path, size = 'w780') {
+function backdropUrl(path, size = "w780") {
     return path ? `${IMG_BASE_URL}${size}${path}` : null;
 }

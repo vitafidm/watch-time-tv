@@ -1,12 +1,18 @@
 "use client";
 
-import { useState } from 'react';
-import { useAuthUser } from '@/hooks/useAuthUser';
-import { callFunction } from '@/lib/api';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import { Search, RefreshCw, AlertCircle, CheckCircle } from 'lucide-react';
+import { useState } from "react";
+import { useAuthUser } from "@/hooks/useAuthUser";
+import { callFunction } from "@/lib/api";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Search, RefreshCw, AlertCircle, CheckCircle } from "lucide-react";
 
 type ProgressState = {
   scanned: number;
@@ -42,14 +48,13 @@ export function LibraryMaintenance() {
     setError(null);
     setProgress(INITIAL_PROGRESS);
 
-    // This recursive function handles the paging logic.
-    const runScan = async (currentCursor: string | null): Promise<void> => {
-      // Always get a fresh token before each call.
+    // Movies & episodes loop
+    const runMediaScan = async (currentCursor: string | null): Promise<void> => {
       const idToken = await user.getIdToken(true);
       const body = { uid: user.uid, processAll: true, cursor: currentCursor };
       const response: any = await callFunction("tmdbBackfillMissing", body, idToken);
 
-      setProgress(prev => ({
+      setProgress((prev) => ({
         scanned: prev.scanned + (response.scanned || 0),
         enriched: prev.enriched + (response.enriched || 0),
         notFound: prev.notFound + (response.notFound || 0),
@@ -57,27 +62,44 @@ export function LibraryMaintenance() {
         skipped: prev.skipped + (response.skipped || 0),
       }));
 
-      // If there's a next page, wait for the recommended delay and continue.
       if (response.nextCursor) {
         const delay = Number(response.retryAfterMs) || 11000;
-        await new Promise(r => setTimeout(r, delay));
-        return runScan(response.nextCursor);
+        await new Promise((r) => setTimeout(r, delay));
+        return runMediaScan(response.nextCursor);
+      }
+    };
+
+    // Shows loop (new)
+    const runShowScan = async (
+      currentCursor: string | null,
+      token: string
+    ): Promise<void> => {
+      const body = { uid: user.uid, cursor: currentCursor };
+      const response: any = await callFunction("tmdbEnrichShows", body, token);
+
+      setProgress((prev) => ({
+        ...prev,
+        scanned: prev.scanned + (response.processed || 0),
+        enriched: prev.enriched + (response.enriched || 0),
+        notFound: prev.notFound + (response.notFound || 0),
+        errors: prev.errors + (response.errors || 0),
+        skipped: prev.skipped + (response.skipped || 0),
+      }));
+
+      if (response.nextStartAfterId) {
+        const delay = 1000; // light delay between show batches
+        await new Promise((r) => setTimeout(r, delay));
+        return runShowScan(response.nextStartAfterId, token);
       }
     };
 
     try {
-      // Start the first scan.
-      await runScan(null);
+      // Phase 1: Movies/episodes
+      await runMediaScan(null);
 
-      // Now that movies are done, enrich TV shows.
+      // Phase 2: Shows
       const idToken = await user.getIdToken(true);
-      const showResponse: any = await callFunction("tmdbEnrichShows", { uid: user.uid }, idToken);
-      setProgress(prev => ({
-        ...prev,
-        scanned: prev.scanned + (showResponse.scanned || 0),
-        enriched: prev.enriched + (showResponse.enriched || 0),
-        errors: prev.errors + (showResponse.errors || 0),
-      }));
+      await runShowScan(null, idToken);
 
       setIsComplete(true);
     } catch (err: any) {
