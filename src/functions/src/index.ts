@@ -23,6 +23,7 @@ import tmdbFixShow from "./tmdbFixShow";
 import tmdbBackfillMissing from "./tmdbBackfill";
 import materializeUserShowsFromFolders from "./materializeUserShowsFromFolders";
 import tmdbEnrichShows from "./tmdbEnrichShows";
+import triggerAgentSync from "./triggerAgentSync";
 
 
 // (Optional, harmless if called again thanks to apps.length guard)
@@ -205,3 +206,4 @@ exports.materializeUserShows = materializeUserShows;
 exports.tmdbFixShow = tmdbFixShow;
 exports.materializeUserShowsFromFolders = materializeUserShowsFromFolders;
 exports.tmdbEnrichShows = tmdbEnrichShows;
+exports.triggerAgentSync = triggerAgentSync;
