@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useState, useEffect } from "react";
@@ -21,6 +22,8 @@ import { RefreshCw, AlertCircle, Server } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import type { ServerDoc } from "@/lib/db.types";
 import { cn } from "@/lib/utils";
+import { useAuthUser } from "@/hooks/useAuthUser";
+import { callFunction } from "@/lib/api";
 
 interface NasActionsProps {
   servers: ServerDoc[];
@@ -28,6 +31,7 @@ interface NasActionsProps {
 
 export default function NasActions({ servers }: NasActionsProps) {
   const { toast } = useToast();
+  const { user } = useAuthUser();
   const [selectedServerId, setSelectedServerId] = useState<string>("");
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
@@ -50,48 +54,40 @@ export default function NasActions({ servers }: NasActionsProps) {
       setError("Please select a server to sync.");
       return;
     }
+    if (!user) {
+        setError("You must be logged in to perform this action.");
+        return;
+    }
 
     const server = linkedServers.find(s => s.serverId === selectedServerId);
-    if (!server || !server.ip) {
-      setError("The selected server does not have a valid IP address configured.");
-      toast({
-        title: "Sync Failed",
-        description: "Selected server is missing an IP address.",
-        variant: "destructive",
-      });
+    if (!server) {
+      setError("The selected server could not be found.");
       return;
     }
 
     setIsSyncing(true);
     setError(null);
     
-    // The agent runs on port 4010 by default
-    const agentUrl = `http://${server.ip}:4010/sync`;
-
     try {
       toast({
         title: "Sync Initiated",
         description: `Asking "${server.name || server.serverId}" to scan and sync its library...`,
       });
 
-      const response = await fetch(agentUrl, { method: "POST" });
-      const responseBody = await response.json().catch(() => ({}));
+      const idToken = await user.getIdToken(true);
+      const responseBody = await callFunction("triggerAgentSync", { serverId: selectedServerId }, idToken);
 
-      if (!response.ok) {
-        throw new Error(responseBody.error || `Agent returned an error: ${response.status}`);
-      }
-
-      const sentCount = responseBody.sentItems || 0;
+      const sentCount = (responseBody as any).sentItems || 0;
       toast({
         title: "Sync Complete",
         description: `Successfully synced ${sentCount} items from your agent. Your libraries will now reflect the changes.`,
       });
     } catch (e: any) {
       console.error("Sync failed:", e);
-      setError(`Failed to connect to agent at ${agentUrl}. Ensure it's running and accessible.`);
+      setError(`Failed to trigger sync for agent. Please ensure it's online and accessible from the cloud.`);
       toast({
         title: "Sync Failed",
-        description: e.message || "Could not connect to the agent.",
+        description: e.message || "Could not connect to the agent via the cloud proxy.",
         variant: "destructive",
       });
     } finally {
