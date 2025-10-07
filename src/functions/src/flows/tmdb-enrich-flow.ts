@@ -3,6 +3,8 @@ import * as functions from "firebase-functions";
 import * as crypto from "crypto";
 import fetch from "node-fetch";
 import { z } from "zod";
+import { pickYouTubeTrailer } from "../lib/titleHelpers";
+
 
 const db = admin.firestore();
 const TMDB_BASE = "https://api.themoviedb.org/3";
@@ -30,6 +32,8 @@ type CacheDoc = {
   backdropPath?: string | null;
   voteAverage?: number | null;
   language?: string | null;
+  cast?: any[] | null;
+  videoLink?: string | null;
   // Firestore Timestamp when read OR server timestamp when written
   cachedAt: FirebaseFirestore.Timestamp | FirebaseFirestore.FieldValue;
 };
@@ -171,6 +175,13 @@ export async function tmdbEnrichFlow(uid: string, rawBody: unknown) {
         const firstAirDate = details.first_air_date || null;
         const voteAverage = typeof details.vote_average === "number" ? details.vote_average : null;
         const language = details.original_language || null;
+        
+        const cast = (details.credits?.cast || []).slice(0, 10).map((c: any) => ({
+          name: c.name,
+          character: c.character,
+          profileUrl: pickBestImage(c.profile_path),
+        }));
+        const videoLink = pickYouTubeTrailer(details.videos?.results);
 
         const toWrite: CacheDoc = {
           tmdbId: details.id,
@@ -183,6 +194,8 @@ export async function tmdbEnrichFlow(uid: string, rawBody: unknown) {
           backdropPath: details.backdrop_path ?? null,
           voteAverage,
           language,
+          cast,
+          videoLink,
           cachedAt: admin.firestore.FieldValue.serverTimestamp()
         };
 
@@ -200,7 +213,9 @@ export async function tmdbEnrichFlow(uid: string, rawBody: unknown) {
         tmdbId: cached.tmdbId,
         tmdbType: cached.tmdbType,                            // "movie" or "tv"
         overview: cached.overview ?? media.overview ?? null,
-        genres: cached.genres ?? media.genres ?? null,
+        genres: cached.genres ?? media.genres ?? [],
+        cast: cached.cast ?? media.cast ?? [],
+        videoLink: cached.videoLink ?? media.videoLink ?? null,
         releaseDate: cached.releaseDate ?? media.releaseDate ?? null,
         firstAirDate: cached.firstAirDate ?? media.firstAirDate ?? null,
         posterUrl: pickBestImage(cached.posterPath) ?? media.posterUrl ?? null,
