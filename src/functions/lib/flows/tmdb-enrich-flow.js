@@ -43,6 +43,7 @@ const functions = __importStar(require("firebase-functions"));
 const crypto = __importStar(require("crypto"));
 const node_fetch_1 = __importDefault(require("node-fetch"));
 const zod_1 = require("zod");
+const titleHelpers_1 = require("../lib/titleHelpers");
 const db = admin.firestore();
 const TMDB_BASE = "https://api.themoviedb.org/3";
 const IMG_BASE = "https://image.tmdb.org/t/p/original";
@@ -84,7 +85,7 @@ async function tmdbSearch(apiKey, type, title, year) {
 async function tmdbDetails(apiKey, tmdbType, id) {
     const url = new URL(`${TMDB_BASE}/${tmdbType}/${id}`);
     url.searchParams.set("api_key", apiKey);
-    url.searchParams.set("append_to_response", "credits");
+    url.searchParams.set("append_to_response", "credits,videos");
     const r = await (0, node_fetch_1.default)(url.toString(), { method: "GET" });
     if (!r.ok)
         return null;
@@ -166,6 +167,12 @@ async function tmdbEnrichFlow(uid, rawBody) {
                 const firstAirDate = details.first_air_date || null;
                 const voteAverage = typeof details.vote_average === "number" ? details.vote_average : null;
                 const language = details.original_language || null;
+                const cast = (details.credits?.cast || []).slice(0, 10).map((c) => ({
+                    name: c.name,
+                    character: c.character,
+                    profileUrl: pickBestImage(c.profile_path),
+                }));
+                const videoLink = (0, titleHelpers_1.pickYouTubeTrailer)(details.videos?.results);
                 const toWrite = {
                     tmdbId: details.id,
                     tmdbType: search.tmdbType, // "movie" | "tv"
@@ -177,6 +184,8 @@ async function tmdbEnrichFlow(uid, rawBody) {
                     backdropPath: details.backdrop_path ?? null,
                     voteAverage,
                     language,
+                    cast,
+                    videoLink,
                     cachedAt: admin.firestore.FieldValue.serverTimestamp()
                 };
                 await cacheRef.set(toWrite, { merge: true });
@@ -191,7 +200,9 @@ async function tmdbEnrichFlow(uid, rawBody) {
                 tmdbId: cached.tmdbId,
                 tmdbType: cached.tmdbType, // "movie" or "tv"
                 overview: cached.overview ?? media.overview ?? null,
-                genres: cached.genres ?? media.genres ?? null,
+                genres: cached.genres ?? media.genres ?? [],
+                cast: cached.cast ?? media.cast ?? [],
+                videoLink: cached.videoLink ?? media.videoLink ?? null,
                 releaseDate: cached.releaseDate ?? media.releaseDate ?? null,
                 firstAirDate: cached.firstAirDate ?? media.firstAirDate ?? null,
                 posterUrl: pickBestImage(cached.posterPath) ?? media.posterUrl ?? null,

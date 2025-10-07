@@ -3,7 +3,7 @@ import * as functions from "firebase-functions";
 import * as crypto from "crypto";
 import fetch from "node-fetch";
 import { z } from "zod";
-import { pickYouTubeTrailer } from "../lib/titleHelpers";
+import { pickYouTubeTrailer } from "../titleHelpers";
 
 
 const db = admin.firestore();
