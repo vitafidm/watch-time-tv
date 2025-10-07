@@ -57,6 +57,7 @@ const tmdbFixShow_1 = __importDefault(require("./tmdbFixShow"));
 const tmdbBackfill_1 = __importDefault(require("./tmdbBackfill"));
 const materializeUserShowsFromFolders_1 = __importDefault(require("./materializeUserShowsFromFolders"));
 const tmdbEnrichShows_1 = __importDefault(require("./tmdbEnrichShows"));
+const triggerAgentSync_1 = __importDefault(require("./triggerAgentSync"));
 // (Optional, harmless if called again thanks to apps.length guard)
 if (!admin.apps.length)
     admin.initializeApp();
@@ -250,3 +251,4 @@ exports.materializeUserShows = materializeUserShows_1.default;
 exports.tmdbFixShow = tmdbFixShow_1.default;
 exports.materializeUserShowsFromFolders = materializeUserShowsFromFolders_1.default;
 exports.tmdbEnrichShows = tmdbEnrichShows_1.default;
+exports.triggerAgentSync = triggerAgentSync_1.default;

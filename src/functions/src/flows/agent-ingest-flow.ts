@@ -1,3 +1,4 @@
+
 import * as crypto from 'crypto';
 import * as admin from 'firebase-admin';
 import { z } from 'zod';
@@ -188,6 +189,10 @@ export async function agentIngestFlow(rawInput: unknown): Promise<{ results: Ing
         serverId,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       };
+      
+      if (dataToUpsert.tmdbId === undefined) {
+        dataToUpsert.tmdbId = null;
+      }
 
       if (typeof item.addedAt !== 'undefined') {
         dataToUpsert.addedAt = toTimestamp(item.addedAt);

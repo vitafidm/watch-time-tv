@@ -1,104 +1,91 @@
-
+// functions/triggerAgentSync.ts
 import * as functions from "firebase-functions";
 import * as admin from "firebase-admin";
 import cors from "cors";
-import fetch from "node-fetch";
 import { db } from "./initFirebase";
 
+if (!admin.apps.length) admin.initializeApp();
 const corsHandler = cors({ origin: true });
 
-export default functions.https.onRequest((req, res) => {
-  corsHandler(req, res, async () => {
-    if (req.method !== "POST") {
-      return res.status(405).json({ error: "Method Not Allowed" });
-    }
+type LibrarySection = "movies" | "tv";
 
-    try {
-      // 1. Authenticate the user
-      const authHeader = req.headers.authorization;
-      if (!authHeader?.startsWith("Bearer ")) {
-        throw new functions.https.HttpsError(
-          "unauthenticated",
-          "User must be authenticated."
-        );
-      }
-      const idToken = authHeader.split("Bearer ")[1];
-      const decodedToken = await admin.auth().verifyIdToken(idToken);
-      const uid = decodedToken.uid;
+export default functions
+  .runWith({ timeoutSeconds: 30, memory: "256MB" })
+  .https.onRequest((req, res) => {
+    corsHandler(req, res, async () => {
+      try {
+        // Only POST
+        if (req.method !== "POST") {
+          return res.status(405).json({ error: { code: "method-not-allowed", message: "Use POST" } });
+        }
 
-      // 2. Validate the request body
-      const { serverId } = req.body;
-      if (!serverId || typeof serverId !== "string") {
-        throw new functions.https.HttpsError(
-          "invalid-argument",
-          "The function must be called with a 'serverId' in the body."
-        );
-      }
+        // --- Auth ---
+        const authHeader = req.headers.authorization || "";
+        if (!authHeader.startsWith("Bearer ")) {
+          throw new functions.https.HttpsError("unauthenticated", "User must be authenticated.");
+        }
+        const idToken = authHeader.substring("Bearer ".length);
+        const decoded = await admin.auth().verifyIdToken(idToken);
+        const uid = decoded?.uid;
+        if (!uid) {
+          throw new functions.https.HttpsError("unauthenticated", "Invalid ID token.");
+        }
 
-      // 3. Look up the server document to find the IP address
-      const serverRef = db.doc(`users/${uid}/servers/${serverId}`);
-      const serverSnap = await serverRef.get();
+        // --- Inputs ---
+        const { serverId, librarySection }: { serverId: string; librarySection?: LibrarySection } = req.body || {};
+        if (!serverId || typeof serverId !== "string") {
+          throw new functions.https.HttpsError("invalid-argument", "Missing or invalid 'serverId'.");
+        }
+        if (librarySection && librarySection !== "movies" && librarySection !== "tv") {
+          throw new functions.https.HttpsError("invalid-argument", "librarySection must be 'movies' or 'tv' if provided.");
+        }
 
-      if (!serverSnap.exists) {
-        throw new functions.https.HttpsError(
-          "not-found",
-          `Server with ID '${serverId}' not found for this user.`
-        );
-      }
+        // (Optional) Verify server exists & belongs to user (keeps UX honest)
+        const serverRef = db.doc(`users/${uid}/servers/${serverId}`);
+        const serverSnap = await serverRef.get();
+        if (!serverSnap.exists) {
+          throw new functions.https.HttpsError("not-found", `Server '${serverId}' not found for user.`);
+        }
 
-      const serverData = serverSnap.data();
-      const ip = serverData?.ip;
+        // --- Create job document for agent to pick up ---
+        // Agent should poll/watch users/{uid}/agentJobs where status == "queued" and serverId matches its own identity.
+        const jobRef = db.collection(`users/${uid}/agentJobs`).doc();
+        const now = admin.firestore.FieldValue.serverTimestamp();
 
-      if (!ip || typeof ip !== "string") {
-        throw new functions.https.HttpsError(
-          "failed-precondition",
-          `Server with ID '${serverId}' does not have a configured IP address.`
-        );
-      }
+        // Build the payload carefully: NEVER include undefined Firestore values.
+        const jobPayload: Record<string, any> = {
+          action: "sync",                  // tells the agent what to do
+          status: "queued",                // queued -> running -> done/error
+          serverId,                        // address the job to a specific agent
+          createdAt: now,
+          updatedAt: now,
+          createdBy: uid,
+          // optional filters
+          librarySection: librarySection ?? null,
+          // optional progress scaffold
+          progress: { scanned: 0, upserted: 0, skipped: 0, errors: 0 },
+        };
 
-      // 4. Proxy the request to the local agent
-      const agentUrl = `http://${ip}:4010/sync`;
-      functions.logger.info(`Proxying sync request for user ${uid} to agent at ${agentUrl}`);
+        await jobRef.set(jobPayload, { merge: false });
 
-      const agentResponse = await fetch(agentUrl, {
-        method: "POST",
-        // Optional: add a timeout if agents might be slow or offline
-        // timeout: 15000, 
-      });
-
-      const agentResponseBody = await agentResponse.json().catch(() => ({}));
-
-      // 5. Relay the agent's response back to the client
-      if (!agentResponse.ok) {
-        functions.logger.error("Agent responded with an error", {
-          status: agentResponse.status,
-          body: agentResponseBody,
-          agentUrl,
+        // Return job info so UI can subscribe/poll for status
+        return res.status(200).json({
+          jobId: jobRef.id,
+          status: "queued",
+          serverId,
+          librarySection: librarySection ?? null,
         });
-        // Relay the agent's error status and message
-        return res.status(agentResponse.status).json({
-          error: {
-            status: "AGENT_ERROR",
-            message: (agentResponseBody as any).error || `Agent returned status ${agentResponse.status}`,
-          }
-        });
+      } catch (err: any) {
+        functions.logger.error("triggerAgentSync error", err);
+        const code = err?.code || "internal";
+        const message = err?.message || "Internal error.";
+        const http =
+          code === "unauthenticated" ? 401 :
+          code === "permission-denied" ? 403 :
+          code === "not-found" ? 404 :
+          code === "invalid-argument" ? 400 :
+          500;
+        return res.status(http).json({ error: { code, message } });
       }
-
-      return res.status(200).json(agentResponseBody);
-
-    } catch (error: any) {
-      functions.logger.error("Error in triggerAgentSync:", error);
-      const code = error.code || "internal";
-      const message = error.message || "An internal error occurred.";
-      const status = 
-        code === "unauthenticated" ? 401 :
-        code === "permission-denied" ? 403 :
-        code === "not-found" ? 404 :
-        code === "invalid-argument" ? 400 :
-        code === "failed-precondition" ? 412 :
-        500;
-      
-      return res.status(status).json({ error: { code, message } });
-    }
+    });
   });
-});
