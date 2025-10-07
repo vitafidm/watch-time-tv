@@ -203,6 +203,9 @@ async function agentIngestFlow(rawInput) {
                 serverId,
                 updatedAt: admin.firestore.FieldValue.serverTimestamp(),
             };
+            if (dataToUpsert.tmdbId === undefined) {
+                dataToUpsert.tmdbId = null;
+            }
             if (typeof item.addedAt !== 'undefined') {
                 dataToUpsert.addedAt = toTimestamp(item.addedAt);
             }

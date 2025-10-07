@@ -70,7 +70,7 @@ async function tmdbSearch(
 async function tmdbDetails(apiKey: string, tmdbType: "movie" | "tv", id: number) {
   const url = new URL(`${TMDB_BASE}/${tmdbType}/${id}`);
   url.searchParams.set("api_key", apiKey);
-  url.searchParams.set("append_to_response", "credits");
+  url.searchParams.set("append_to_response", "credits,videos");
   const r = await fetch(url.toString(), { method: "GET" });
   if (!r.ok) return null;
   return r.json() as any;
