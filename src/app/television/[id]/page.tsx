@@ -8,6 +8,7 @@ import { doc, getDoc, collection, query, where, orderBy, getDocs } from 'firebas
 import type { MediaDoc } from '@/functions/src/types';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ShowHero } from '@/components/ShowHero';
+import { EpisodeSelector } from '@/components/EpisodeSelector';
 
 // Helper to convert Firestore Timestamps to serializable format for <pre> tag
 function serializeFirestoreData(data: any) {
@@ -64,7 +65,7 @@ export default function ShowDetailPage({ params }: { params: Promise<{ id: strin
         );
 
         const episodesSnap = await getDocs(episodesQuery);
-        const fetchedEpisodesData = episodesSnap.docs.map(doc => doc.data() as MediaDoc);
+        const fetchedEpisodesData = episodesSnap.docs.map(doc => ({...doc.data(), id: doc.id}) as MediaDoc);
         setEpisodesData(fetchedEpisodesData);
 
       } catch (err: any) {
@@ -80,8 +81,9 @@ export default function ShowDetailPage({ params }: { params: Promise<{ id: strin
 
   if (loading) {
     return (
-      <div className="container mx-auto p-4 space-y-4">
-        <Skeleton className="h-10 w-1/2" />
+      <div className="container mx-auto p-4 space-y-8">
+        <Skeleton className="h-screen w-full -mt-16 -ml-4 sm:-ml-6" />
+        <Skeleton className="h-10 w-1/4" />
         <Skeleton className="h-64 w-full" />
       </div>
     );
@@ -110,10 +112,8 @@ export default function ShowDetailPage({ params }: { params: Promise<{ id: strin
       {!loading && showData && (
         <>
           <ShowHero show={showData} />
-          <div className="container mx-auto p-4 relative z-10 space-y-8">
-            <pre className="bg-muted p-4 rounded-md overflow-x-auto text-xs">
-              {JSON.stringify(episodesData.map(serializeFirestoreData), null, 2)}
-            </pre>
+          <div className="container mx-auto p-4 relative z-10 space-y-8 mt-8">
+            <EpisodeSelector episodes={episodesData} />
           </div>
         </>
       )}
