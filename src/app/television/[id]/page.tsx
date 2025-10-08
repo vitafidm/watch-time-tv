@@ -1,7 +1,7 @@
 
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, use } from 'react';
 import { useAuthUser } from '@/hooks/useAuthUser';
 import { db } from '@/lib/firebase.client';
 import { doc, getDoc, collection, query, where, orderBy, getDocs } from 'firebase/firestore';
@@ -20,9 +20,10 @@ function serializeFirestoreData(data: any) {
   return serialized;
 }
 
-export default function ShowDetailPage({ params }: { params: { id: string } }) {
+export default function ShowDetailPage({ params }: { params: Promise<{ id: string }> }) {
+  const resolvedParams = use(params);
+  const showId = resolvedParams.id;
   const { user } = useAuthUser();
-  const showId = params.id;
 
   const [showData, setShowData] = useState<any>(null);
   const [episodesData, setEpisodesData] = useState<MediaDoc[]>([]);
