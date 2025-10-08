@@ -7,6 +7,7 @@ import { db } from '@/lib/firebase.client';
 import { doc, getDoc, collection, query, where, orderBy, getDocs } from 'firebase/firestore';
 import type { MediaDoc } from '@/functions/src/types';
 import { Skeleton } from '@/components/ui/skeleton';
+import { ShowHero } from '@/components/ShowHero';
 
 // Helper to convert Firestore Timestamps to serializable format for <pre> tag
 function serializeFirestoreData(data: any) {
@@ -105,24 +106,17 @@ export default function ShowDetailPage({ params }: { params: Promise<{ id: strin
   }
 
   return (
-    <div className="container mx-auto p-4">
-      <h1 className="font-headline text-4xl font-bold mb-4">{showData?.title || 'Loading...'}</h1>
-      
-      <div className="space-y-4">
-        <div>
-          <h2 className="text-2xl font-semibold">Show Data</h2>
-          <pre className="bg-muted p-4 rounded-md overflow-x-auto text-xs">
-            {JSON.stringify(serializeFirestoreData(showData), null, 2)}
-          </pre>
-        </div>
-        
-        <div>
-          <h2 className="text-2xl font-semibold">Episodes Data ({episodesData.length})</h2>
-          <pre className="bg-muted p-4 rounded-md overflow-x-auto text-xs">
-            {JSON.stringify(episodesData.map(serializeFirestoreData), null, 2)}
-          </pre>
-        </div>
-      </div>
+    <div>
+      {!loading && showData && (
+        <>
+          <ShowHero show={showData} />
+          <div className="container mx-auto p-4 relative z-10 space-y-8">
+            <pre className="bg-muted p-4 rounded-md overflow-x-auto text-xs">
+              {JSON.stringify(episodesData.map(serializeFirestoreData), null, 2)}
+            </pre>
+          </div>
+        </>
+      )}
     </div>
   );
 }
