@@ -8,6 +8,7 @@ import { Tv, RefreshCw } from "lucide-react";
 import type { MediaDoc } from "@/lib/db.types";
 import { useMemo, useRef, useState, useEffect, useCallback } from "react";
 import Image from "next/image";
+import Link from "next/link";
 import { useInfiniteFirestore } from "@/hooks/useInfiniteFirestore";
 import { MediaEditButton } from "@/components/MediaEditButton";
 import { MediaEditModal, type MediaEditModalItem } from "@/components/MediaEditModal";
@@ -32,7 +33,7 @@ function ShowCard({ item, onEdit }: { item: ShowDoc, onEdit: () => void; }) {
     const displayTitle = item.displayTitle || item.title;
 
     return (
-        <div role="button" aria-disabled="true" className="group block">
+        <Link href={`/television/${item.id}`} className="group block">
             <div className="flex flex-col gap-2">
                 <div className="relative aspect-[2/3] w-full overflow-hidden rounded-lg shadow-lg transition-all duration-300 group-hover:scale-105 group-hover:shadow-primary/40">
                     <Image
@@ -54,7 +55,7 @@ function ShowCard({ item, onEdit }: { item: ShowDoc, onEdit: () => void; }) {
                   </div>
                 </div>
             </div>
-        </div>
+        </Link>
     );
 }
 
