@@ -9,18 +9,7 @@ import type { MediaDoc } from '@/functions/src/types';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ShowHero } from '@/components/ShowHero';
 import { EpisodeSelector } from '@/components/EpisodeSelector';
-
-// Helper to convert Firestore Timestamps to serializable format for <pre> tag
-function serializeFirestoreData(data: any) {
-  if (!data) return data;
-  const serialized = { ...data };
-  for (const key in serialized) {
-    if (serialized[key] && typeof serialized[key].toDate === 'function') {
-      serialized[key] = serialized[key].toDate().toISOString();
-    }
-  }
-  return serialized;
-}
+import { CastSection } from '@/components/CastSection';
 
 export default function ShowDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const resolvedParams = use(params);
@@ -114,6 +103,7 @@ export default function ShowDetailPage({ params }: { params: Promise<{ id: strin
           <ShowHero show={showData} />
           <div className="container mx-auto p-4 relative z-10 space-y-8 mt-8">
             <EpisodeSelector episodes={episodesData} />
+            <CastSection cast={showData.cast} />
           </div>
         </>
       )}
