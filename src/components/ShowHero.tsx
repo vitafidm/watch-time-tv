@@ -95,10 +95,10 @@ export function ShowHero({ show }: ShowHeroProps) {
       {/* Content */}
       <div className="absolute inset-0 flex items-end p-8">
         <div className="w-full max-w-md md:max-w-lg lg:max-w-xl space-y-4">
-            <h1 className="font-headline text-5xl md:text-6xl font-bold text-foreground drop-shadow-2xl">
+            <h1 className="font-headline text-3xl sm:text-4xl md:text-5xl lg:text-6xl font-bold text-foreground drop-shadow-2xl">
                 {show.title}
             </h1>
-            <p className="text-base text-foreground/80 line-clamp-3 leading-relaxed drop-shadow-lg">
+            <p className="text-sm sm:text-base text-foreground/80 line-clamp-3 leading-relaxed drop-shadow-lg">
                 {show.overview}
             </p>
             <div className="flex flex-wrap items-center gap-2">

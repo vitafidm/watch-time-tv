@@ -97,7 +97,7 @@ export default function ShowDetailPage({ params }: { params: Promise<{ id: strin
   }
 
   return (
-    <div className="container mx-auto space-y-8 p-4">
+    <div className="container space-y-8">
       {!loading && showData && (
         <>
           <ShowHero show={showData} />
