@@ -46,7 +46,7 @@ export function ShowHero({ show }: ShowHeroProps) {
     if (phase === 'preload') {
       const playTimer = setTimeout(() => {
         setPhase('playing');
-      }, 2000); // 2-second preload
+      }, 6000); // 6-second preload
       
       return () => clearTimeout(playTimer);
     }
@@ -107,12 +107,12 @@ export function ShowHero({ show }: ShowHeroProps) {
       <div className="absolute inset-0 bg-gradient-to-r from-black/80 via-black/40 to-transparent" />
 
       {/* Content */}
-      <div className="absolute inset-0 flex items-end p-8">
+      <div className="absolute inset-0 flex items-center p-8">
         <div className="w-full max-w-md md:max-w-lg lg:max-w-xl space-y-4">
             <h1 className="font-headline text-3xl sm:text-4xl md:text-5xl lg:text-6xl font-bold text-foreground drop-shadow-2xl">
                 {show.title}
             </h1>
-            <p className="text-sm sm:text-base text-foreground/80 line-clamp-3 leading-relaxed drop-shadow-lg">
+            <p className="hidden md:block text-sm sm:text-base text-foreground/80 line-clamp-3 leading-relaxed drop-shadow-lg">
                 {show.overview}
             </p>
             <div className="flex flex-wrap items-center gap-2">

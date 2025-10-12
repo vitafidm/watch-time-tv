@@ -4,7 +4,7 @@
 import { useState, useMemo } from 'react';
 import type { MediaDoc } from '@/lib/db.types';
 import { Card, CardContent } from '@/components/ui/card';
-import { Carousel, CarouselContent, CarouselItem, CarouselNext, CarouselPrevious } from '@/components/ui/carousel';
+import { Carousel, CarouselContent, CarouselItem } from '@/components/ui/carousel';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Button } from '@/components/ui/button';
 import { Play } from 'lucide-react';
@@ -77,7 +77,7 @@ export function EpisodeSelector({ episodes }: EpisodeSelectorProps) {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h2 className="font-headline text-3xl font-bold tracking-tight">Seasons</h2>
+        <h2 className="font-headline text-3xl font-bold tracking-tight">Episodes</h2>
         {seasons.length > 1 && (
           <Select
             value={String(selectedSeason)}
@@ -111,8 +111,6 @@ export function EpisodeSelector({ episodes }: EpisodeSelectorProps) {
             </CarouselItem>
           ))}
         </CarouselContent>
-        <CarouselPrevious className="hidden md:flex" />
-        <CarouselNext className="hidden md:flex" />
       </Carousel>
     </div>
   );
