@@ -112,10 +112,10 @@ export function ShowHero({ show }: ShowHeroProps) {
             <h1 className="font-headline text-3xl sm:text-4xl md:text-5xl lg:text-6xl font-bold text-foreground drop-shadow-2xl">
                 {show.title}
             </h1>
-            <p className="hidden md:block text-sm sm:text-base text-foreground/80 line-clamp-3 leading-relaxed drop-shadow-lg">
+            <p className="line-clamp-1 sm:line-clamp-3 md:line-clamp-none text-sm sm:text-base text-foreground/80 leading-relaxed drop-shadow-lg">
                 {show.overview}
             </p>
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="hidden sm:flex flex-wrap items-center gap-2">
               {(show.genres || []).map(genre => (
                 <Badge key={genre} variant="secondary">{genre}</Badge>
               ))}
