@@ -1,3 +1,4 @@
+
 'use client';
 
 import { useState, useEffect, useMemo } from 'react';
@@ -33,18 +34,31 @@ function getYouTubeId(url: string): string | null {
     return (match && match[2].length === 11) ? match[2] : null;
 }
 
+type VideoPhase = 'preload' | 'playing' | 'finished';
+
 export function ShowHero({ show }: ShowHeroProps) {
   const videoId = useMemo(() => show.videoLink ? getYouTubeId(show.videoLink) : null, [show.videoLink]);
-  const [showVideo, setShowVideo] = useState(!!videoId);
+  const [phase, setPhase] = useState<VideoPhase>(videoId ? 'preload' : 'finished');
 
   useEffect(() => {
-    if (videoId) {
-      const timer = setTimeout(() => {
-        setShowVideo(false);
-      }, 20000); // 20 seconds
-      return () => clearTimeout(timer);
+    if (!videoId) return;
+
+    if (phase === 'preload') {
+      const playTimer = setTimeout(() => {
+        setPhase('playing');
+      }, 2000); // 2-second preload
+      
+      return () => clearTimeout(playTimer);
     }
-  }, [videoId]);
+    
+    if (phase === 'playing') {
+      const finishTimer = setTimeout(() => {
+        setPhase('finished');
+      }, 20000); // 20-second video play
+      
+      return () => clearTimeout(finishTimer);
+    }
+  }, [phase, videoId]);
 
   const mediaItem: MediaItem = {
       id: show.tmdbShowId || 0,
@@ -70,7 +84,7 @@ export function ShowHero({ show }: ShowHeroProps) {
                 allowFullScreen
                 className={cn(
                     "absolute inset-0 w-full h-full object-cover transition-opacity duration-1000",
-                    showVideo ? "opacity-100" : "opacity-0 pointer-events-none"
+                    phase === 'playing' ? "opacity-100" : "opacity-0 pointer-events-none"
                 )}
             />
         )}
@@ -81,7 +95,7 @@ export function ShowHero({ show }: ShowHeroProps) {
                 fill
                 className={cn(
                     "object-cover transition-opacity duration-1000",
-                    (videoId && showVideo) ? "opacity-0" : "opacity-100"
+                     phase === 'playing' ? "opacity-0" : "opacity-100"
                 )}
                 priority
             />
