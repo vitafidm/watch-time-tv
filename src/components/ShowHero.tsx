@@ -59,7 +59,7 @@ export function ShowHero({ show }: ShowHeroProps) {
   };
 
   return (
-    <div className="relative h-[70vh] w-full rounded-xl overflow-hidden">
+    <div className="relative aspect-video w-full rounded-xl overflow-hidden">
       {/* Background Media */}
       <div className="absolute inset-0 bg-black">
         {videoId && (
@@ -93,30 +93,29 @@ export function ShowHero({ show }: ShowHeroProps) {
       <div className="absolute inset-0 bg-gradient-to-r from-black/80 via-black/40 to-transparent" />
 
       {/* Content */}
-      <div className="absolute inset-0 flex items-end">
-        <div className="container mx-auto">
-            <div className="w-full max-w-md md:max-w-lg lg:max-w-xl space-y-4">
-                <h1 className="font-headline text-5xl md:text-6xl font-bold text-foreground drop-shadow-2xl">
-                    {show.title}
-                </h1>
-                <p className="text-base text-foreground/80 line-clamp-3 leading-relaxed drop-shadow-lg">
-                    {show.overview}
-                </p>
-                <div className="flex flex-wrap items-center gap-2">
-                  {(show.genres || []).map(genre => (
-                    <Badge key={genre} variant="secondary">{genre}</Badge>
-                  ))}
-                </div>
-                <div className="flex items-center gap-2">
-                    <Button size="lg" className="font-bold">
-                        <Play className="mr-2" />
-                        Play
-                    </Button>
-                    <WatchlistButton 
-                        item={mediaItem} 
-                        className="font-bold bg-black/40 text-white backdrop-blur-sm hover:bg-black/60"
-                    />
-                </div>
+      <div className="absolute inset-0 flex items-end p-8">
+        <div className="w-full max-w-md md:max-w-lg lg:max-w-xl space-y-4">
+            <h1 className="font-headline text-5xl md:text-6xl font-bold text-foreground drop-shadow-2xl">
+                {show.title}
+            </h1>
+            <p className="text-base text-foreground/80 line-clamp-3 leading-relaxed drop-shadow-lg">
+                {show.overview}
+            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              {(show.genres || []).map(genre => (
+                <Badge key={genre} variant="secondary">{genre}</Badge>
+              ))}
+            </div>
+            <div className="flex items-center gap-2">
+                <Button size="lg" className="font-bold">
+                    <Play className="mr-2" />
+                    Play
+                </Button>
+                <WatchlistButton
+                    item={mediaItem}
+                    variant="secondary"
+                    className="font-bold"
+                />
             </div>
         </div>
       </div>
