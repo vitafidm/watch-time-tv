@@ -71,7 +71,7 @@ export default function ShowDetailPage({ params }: { params: Promise<{ id: strin
   if (loading) {
     return (
       <div className="container mx-auto p-4 space-y-8">
-        <Skeleton className="h-screen w-full -mt-16 -ml-4 sm:-ml-6" />
+        <Skeleton className="h-[70vh] w-full" />
         <Skeleton className="h-10 w-1/4" />
         <Skeleton className="h-64 w-full" />
       </div>
@@ -97,14 +97,12 @@ export default function ShowDetailPage({ params }: { params: Promise<{ id: strin
   }
 
   return (
-    <div>
+    <div className="container mx-auto space-y-8 p-4">
       {!loading && showData && (
         <>
           <ShowHero show={showData} />
-          <div className="container mx-auto p-4 relative z-10 space-y-8 mt-8">
-            <EpisodeSelector episodes={episodesData} />
-            <CastSection cast={showData.cast} />
-          </div>
+          <EpisodeSelector episodes={episodesData} />
+          <CastSection cast={showData.cast} />
         </>
       )}
     </div>
