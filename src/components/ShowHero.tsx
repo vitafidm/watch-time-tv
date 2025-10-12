@@ -4,14 +4,22 @@
 import { useState, useEffect, useMemo } from 'react';
 import Image from 'next/image';
 import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
 import { Play } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import type { MediaItem } from '@/lib/types';
+import { WatchlistButton } from '@/components/watchlist-button';
 
 type ShowData = {
   title: string;
   overview: string;
   videoLink?: string | null;
   backdropUrl?: string | null;
+  posterUrl?: string | null;
+  tmdbShowId?: number;
+  firstAirDate?: string;
+  voteAverage?: number;
+  genres?: string[];
   [key: string]: any;
 };
 
@@ -39,8 +47,20 @@ export function ShowHero({ show }: ShowHeroProps) {
     }
   }, [videoId]);
 
+  const mediaItem: MediaItem = {
+      id: show.tmdbShowId || 0,
+      title: show.title,
+      overview: show.overview,
+      poster_path: show.posterUrl || '',
+      backdrop_path: show.backdropUrl || '',
+      release_date: show.firstAirDate || '',
+      vote_average: show.voteAverage || 0,
+      genres: show.genres || [],
+      media_type: 'tv',
+  };
+
   return (
-    <div className="relative h-screen w-screen -mt-16 -ml-4 sm:-ml-6 -z-10">
+    <div className="relative h-[70vh] w-full rounded-xl overflow-hidden">
       {/* Background Media */}
       <div className="absolute inset-0 bg-black">
         {videoId && (
@@ -74,18 +94,26 @@ export function ShowHero({ show }: ShowHeroProps) {
       <div className="absolute inset-0 bg-gradient-to-r from-background via-background/30 to-transparent" />
 
       {/* Content */}
-      <div className="absolute inset-0 flex items-center p-4 sm:p-6">
-        <div className="w-full max-w-md md:max-w-lg lg:max-w-xl space-y-6">
+      <div className="absolute inset-0 flex items-end p-8">
+        <div className="w-full max-w-md md:max-w-lg lg:max-w-xl space-y-4">
             <h1 className="font-headline text-5xl md:text-6xl lg:text-7xl font-bold text-foreground drop-shadow-2xl">
                 {show.title}
             </h1>
             <p className="text-lg text-foreground/80 line-clamp-3 leading-relaxed drop-shadow-lg">
                 {show.overview}
             </p>
-            <Button size="lg">
-                <Play className="mr-2" />
-                Play
-            </Button>
+            <div className="flex flex-wrap items-center gap-2">
+              {(show.genres || []).map(genre => (
+                <Badge key={genre} variant="secondary">{genre}</Badge>
+              ))}
+            </div>
+            <div className="flex items-center gap-2">
+                <Button size="lg">
+                    <Play className="mr-2" />
+                    Play
+                </Button>
+                <WatchlistButton item={mediaItem} />
+            </div>
         </div>
       </div>
     </div>
