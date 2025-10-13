@@ -1,3 +1,4 @@
+
 "use client";
 
 import {
@@ -7,6 +8,7 @@ import {
   createContext,
   useContext,
   ReactNode,
+  useCallback,
 } from "react";
 import { onAuthStateChanged, User } from "firebase/auth";
 import { auth } from "@/lib/firebase.client";
@@ -45,16 +47,19 @@ export function ServerConfigProvider({ children }: { children: ReactNode }) {
     return () => unsub();
   }, []);
 
-  const save = async (patch: Partial<ServerConfig>) => {
-    if (!user) return;
-    const next = { ...(config ?? {}), ...patch } as ServerConfig;
-    await saveServerConfig(user.uid, next);
-    setConfig(next);
-  };
+  const save = useCallback(
+    async (patch: Partial<ServerConfig>) => {
+      if (!user) return;
+      const next = { ...(config ?? {}), ...patch } as ServerConfig;
+      await saveServerConfig(user.uid, next);
+      setConfig(next);
+    },
+    [user, config]
+  );
 
   const value = useMemo(
     () => ({ user, config, loading, save }),
-    [user, config, loading]
+    [user, config, loading, save]
   );
 
   return (

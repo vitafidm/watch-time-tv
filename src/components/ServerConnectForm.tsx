@@ -1,15 +1,14 @@
 
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { useServerConfig } from "@/hooks/useServerConfig";
-import { useAuthUser } from "@/hooks/useAuthUser";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription, AlertTitle } from "./ui/alert";
-import { AlertCircle, Check, RefreshCw, Wifi } from "lucide-react";
+import { AlertCircle, Check, RefreshCw } from "lucide-react";
 import { Skeleton } from "./ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 
@@ -23,9 +22,23 @@ function isValidUrl(s: string) {
 }
 
 export default function ServerConnectForm() {
-  const { authed, config, setConfig, loading, saving, persist } = useServerConfig();
-  const [error, setError] = useState("");
+  const { user, config, loading, save } = useServerConfig();
   const { toast } = useToast();
+
+  const [backendUrl, setBackendUrl] = useState("");
+  const [moviesPath, setMoviesPath] = useState("");
+  const [tvPath, setTvPath] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  
+  useEffect(() => {
+    if (config) {
+        setBackendUrl(config.backendUrl || "");
+        setMoviesPath(config.mediaRoots?.moviesPath || "");
+        setTvPath(config.mediaRoots?.tvPath || "");
+    }
+  }, [config]);
+
 
   if (loading) {
     return (
@@ -38,12 +51,13 @@ export default function ServerConnectForm() {
                 <Skeleton className="h-10 w-full" />
                 <Skeleton className="h-10 w-full" />
                 <Skeleton className="h-10 w-full" />
+                <Skeleton className="h-10 w-24" />
             </CardContent>
         </Card>
     );
   }
   
-  if (!authed) {
+  if (!user) {
     return null; // The parent page `Settings` handles the main auth gate.
   }
 
@@ -51,24 +65,25 @@ export default function ServerConnectForm() {
     e.preventDefault();
     setError("");
 
-    const backendUrl = (config.backendUrl || "").trim();
-    const moviesPath = (config.mediaRoots?.moviesPath || "").trim();
-    const tvPath = (config.mediaRoots?.tvPath || "").trim();
+    const finalBackendUrl = backendUrl.trim();
+    const finalMoviesPath = moviesPath.trim();
+    const finalTvPath = tvPath.trim();
 
-    if (!backendUrl || !isValidUrl(backendUrl)) {
+    if (!finalBackendUrl || !isValidUrl(finalBackendUrl)) {
       setError("Please enter a valid Backend URL, including http:// or https://.");
       return;
     }
-    if (!moviesPath || !tvPath) {
+    if (!finalMoviesPath || !finalTvPath) {
       setError("Please provide the full paths for both your Movies and TV Shows folders.");
       return;
     }
 
+    setSaving(true);
     try {
-      await persist({
+      await save({
         provider: "direct",
-        backendUrl,
-        mediaRoots: { moviesPath, tvPath },
+        backendUrl: finalBackendUrl,
+        mediaRoots: { moviesPath: finalMoviesPath, tvPath: finalTvPath },
       });
       toast({
         title: "Settings Saved",
@@ -76,6 +91,8 @@ export default function ServerConnectForm() {
       });
     } catch (err: any) {
       setError(err?.message ?? "Failed to save settings. Please try again.");
+    } finally {
+        setSaving(false);
     }
   }
 
@@ -94,8 +111,8 @@ export default function ServerConnectForm() {
             <Input
               id="backendUrl"
               placeholder="http://192.168.1.50:4000"
-              value={config.backendUrl ?? ""}
-              onChange={(e) => setConfig((c) => ({ ...c, backendUrl: e.target.value }))}
+              value={backendUrl}
+              onChange={(e) => setBackendUrl(e.target.value)}
               disabled={saving}
             />
           </div>
@@ -105,13 +122,8 @@ export default function ServerConnectForm() {
             <Input
               id="moviesPath"
               placeholder="/volume1/Media/Movies"
-              value={config.mediaRoots?.moviesPath ?? ""}
-              onChange={(e) =>
-                setConfig((c) => ({
-                  ...c,
-                  mediaRoots: { ...(c.mediaRoots || {}), moviesPath: e.target.value },
-                }))
-              }
+              value={moviesPath}
+              onChange={(e) => setMoviesPath(e.target.value)}
               disabled={saving}
             />
           </div>
@@ -121,13 +133,8 @@ export default function ServerConnectForm() {
             <Input
               id="tvPath"
               placeholder="/volume1/Media/TV Shows"
-              value={config.mediaRoots?.tvPath ?? ""}
-              onChange={(e) =>
-                setConfig((c) => ({
-                  ...c,
-                  mediaRoots: { ...(c.mediaRoots || {}), tvPath: e.target.value },
-                }))
-              }
+              value={tvPath}
+              onChange={(e) => setTvPath(e.target.value)}
               disabled={saving}
             />
           </div>
