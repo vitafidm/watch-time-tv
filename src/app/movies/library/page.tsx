@@ -15,6 +15,8 @@ import { useToast } from "@/hooks/use-toast";
 import { useInfiniteFirestore } from "@/hooks/useInfiniteFirestore";
 import { MediaEditButton } from "@/components/MediaEditButton";
 import { MediaEditModal, type MediaEditModalItem } from "@/components/MediaEditModal";
+import { PlayButton } from "@/components/PlayButton";
+import { PlayerDialog } from "@/components/PlayerDialog";
 
 function getInitials(title: string = ""): string {
   return title
@@ -28,7 +30,7 @@ function getInitials(title: string = ""): string {
 
 
 // A version of MediaCard that works with MediaDoc from Firestore
-function MediaDocCard({ item, onEdit }: { item: MediaDoc & {id: string}, onEdit: () => void; }) {
+function MediaDocCard({ item, onEdit, onPlay }: { item: MediaDoc & {id: string}, onEdit: () => void; onPlay: () => void; }) {
     const displayTitle = item.normalizedTitle || item.title;
 
     const mediaItem = useMemo(() => {
@@ -59,7 +61,7 @@ function MediaDocCard({ item, onEdit }: { item: MediaDoc & {id: string}, onEdit:
     }, [item, displayTitle]);
     
     return (
-        <div className="group block">
+        <div className="group block" data-testid="movie-card">
             <div className="relative aspect-[2/3] w-full overflow-hidden rounded-lg shadow-lg transition-all duration-300 group-hover:scale-105 group-hover:shadow-primary/40 bg-muted">
                 <Link href={`/media/${item.mediaId}`} prefetch={false} className="block w-full h-full">
                     {mediaItem.poster_path ? (
@@ -81,6 +83,10 @@ function MediaDocCard({ item, onEdit }: { item: MediaDoc & {id: string}, onEdit:
                     <WatchlistButton item={mediaItem} asIcon />
                 </div>
                 <MediaEditButton onOpen={onEdit} />
+                <PlayButton
+                  onClick={onPlay}
+                  className="opacity-0 group-hover:opacity-100 transition-opacity"
+                />
             </div>
             <div className="space-y-1 mt-2">
             <h3 className="font-headline text-base font-bold text-foreground truncate" title={displayTitle}>
@@ -115,6 +121,10 @@ function MovieLibrary() {
 
   
   const [editingItem, setEditingItem] = useState<MediaEditModalItem | null>(null);
+  const [open, setOpen] = useState(false);
+  const [selectedMediaId, setSelectedMediaId] = useState<string | null>(null);
+  const [selectedTitle, setSelectedTitle] = useState<string | undefined>(undefined);
+
 
   const sentinelRef = useRef(null);
   attachSentinel(sentinelRef.current);
@@ -180,9 +190,9 @@ function MovieLibrary() {
       )}
 
       {!showInitialLoading && movies.length > 0 && (
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 md:gap-6">
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 md:gap-6" data-testid="movies-grid">
           {movies.map(item => (
-            <MediaDocCard key={item.id} item={item} onEdit={() => handleEdit(item)} />
+            <MediaDocCard key={item.id} item={item} onEdit={() => handleEdit(item)} onPlay={() => { setSelectedMediaId(item.mediaId); setSelectedTitle(item.title); setOpen(true); }}/>
           ))}
         </div>
       )}
@@ -203,6 +213,7 @@ function MovieLibrary() {
         item={editingItem}
         onApplied={handleApplied}
       />
+      <PlayerDialog open={open} onOpenChange={setOpen} mediaId={selectedMediaId} title={selectedTitle} />
     </div>
   );
 }

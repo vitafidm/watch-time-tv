@@ -10,6 +10,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { ShowHero } from '@/components/ShowHero';
 import { EpisodeSelector } from '@/components/EpisodeSelector';
 import { CastSection } from '@/components/CastSection';
+import { PlayerDialog } from '@/components/PlayerDialog';
 
 export default function ShowDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const resolvedParams = use(params);
@@ -20,6 +21,10 @@ export default function ShowDetailPage({ params }: { params: Promise<{ id: strin
   const [episodesData, setEpisodesData] = useState<MediaDoc[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  const [open, setOpen] = useState(false);
+  const [selectedMediaId, setSelectedMediaId] = useState<string | null>(null);
+  const [selectedTitle, setSelectedTitle] = useState<string | undefined>(undefined);
 
   useEffect(() => {
     if (!user || !showId) {
@@ -97,14 +102,22 @@ export default function ShowDetailPage({ params }: { params: Promise<{ id: strin
   }
 
   return (
-    <div className="container space-y-8">
+    <div className="container space-y-8" data-testid="show-detail">
       {!loading && showData && (
         <>
           <ShowHero show={showData} />
-          <EpisodeSelector episodes={episodesData} />
+          <EpisodeSelector 
+            episodes={episodesData} 
+            onPlay={(episode) => {
+              setSelectedMediaId(episode.mediaId);
+              setSelectedTitle(episode.title);
+              setOpen(true);
+            }}
+          />
           <CastSection cast={showData.cast} />
         </>
       )}
+      <PlayerDialog open={open} onOpenChange={setOpen} mediaId={selectedMediaId} title={selectedTitle} />
     </div>
   );
 }

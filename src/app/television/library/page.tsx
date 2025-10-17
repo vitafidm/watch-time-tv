@@ -15,6 +15,7 @@ import { MediaEditModal, type MediaEditModalItem } from "@/components/MediaEditM
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { callFunction } from "@/lib/api";
+import { PlayButton } from "@/components/PlayButton";
 
 // Represents a document from the /users/{uid}/shows collection
 type ShowDoc = {
@@ -33,7 +34,7 @@ function ShowCard({ item, onEdit }: { item: ShowDoc, onEdit: () => void; }) {
     const displayTitle = item.displayTitle || item.title;
 
     return (
-        <Link href={`/television/${item.id}`} className="group block">
+        <Link href={`/television/${item.id}`} className="group block" data-testid="show-card">
             <div className="flex flex-col gap-2">
                 <div className="relative aspect-[2/3] w-full overflow-hidden rounded-lg shadow-lg transition-all duration-300 group-hover:scale-105 group-hover:shadow-primary/40">
                     <Image
@@ -45,6 +46,7 @@ function ShowCard({ item, onEdit }: { item: ShowDoc, onEdit: () => void; }) {
                         data-ai-hint="tv show poster"
                     />
                     <MediaEditButton onOpen={onEdit} />
+                    <PlayButton asNavigateHref={`/television/${item.id}`} label="Open" />
                 </div>
                 <div className="space-y-1">
                   <h3 className="font-headline text-base font-bold text-foreground truncate">
@@ -155,7 +157,7 @@ function TvLibrary() {
       )}
 
       {!showInitialLoading && shows.length > 0 && (
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 md:gap-6">
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 md:gap-6" data-testid="tv-grid">
           {shows.map(item => (
             <ShowCard key={item.id} item={item} onEdit={() => handleEdit(item)} />
           ))}
@@ -189,7 +191,3 @@ export default function TvLibraryPage() {
         </ProtectedRoute>
     )
 }
-
-    
-
-    
