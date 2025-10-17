@@ -14,6 +14,22 @@ import {
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Search, RefreshCw, AlertCircle, CheckCircle } from "lucide-react";
 
+// Firestore imports for episode scan
+import { db } from "@/lib/firebase";
+import {
+  collection,
+  query,
+  where,
+  orderBy,
+  limit as fbLimit,
+  getDocs,
+  startAfter,
+  type Query,
+  type QuerySnapshot,
+  type QueryDocumentSnapshot,
+  type DocumentData,
+} from "firebase/firestore";
+
 type ProgressState = {
   scanned: number;
   enriched: number;
@@ -93,6 +109,65 @@ export function LibraryMaintenance() {
       }
     };
 
+    // Episodes loop (uses existing tmdbEnrichEpisodes function)
+    const runEpisodeScan = async (token: string): Promise<void> => {
+      const PAGE_SIZE = 50; // tmdbEnrichEpisodes caps at 50 items
+      let lastDoc: QueryDocumentSnapshot<DocumentData> | null = null;
+
+      while (true) {
+        // Only episodes whose parent show is matched and episode fields still missing
+        const baseQuery: Query<DocumentData> = query(
+          collection(db, `users/${user.uid}/media`),
+          where("type", "==", "episode"),
+          where("tmdbShowId", ">", 0),
+          where("episodeTitle", "==", null),
+          orderBy("tmdbShowId", "asc"),
+          fbLimit(PAGE_SIZE)
+        );
+
+        // Prepare the query for this page
+        const qRef: Query<DocumentData> = lastDoc
+          ? query(baseQuery, startAfter(lastDoc))
+          : baseQuery;
+
+        // Type the snapshot explicitly
+        const snap: QuerySnapshot<DocumentData> = await getDocs(qRef);
+        if (snap.empty) break;
+
+        // Type each doc in the map
+        const items = snap.docs.map((d: QueryDocumentSnapshot<DocumentData>) => {
+          const data = d.data() as any;
+          return {
+            mediaId: d.id,
+            showId: data.tmdbShowId,
+            season: data.season ?? data.seasonNumber ?? 1,
+            episode: data.episodeNumber ?? data.episode ?? 1,
+          };
+        });
+
+        const body = { items };
+        const response: any = await callFunction("tmdbEnrichEpisodes", body, token);
+
+        const enriched = (response?.results || []).filter((r: any) => r.status === "enriched").length;
+        const notFound = (response?.results || []).filter((r: any) => r.status === "not_found").length;
+        const errors = (response?.results || []).filter((r: any) => r.status === "error").length;
+        const scanned = (response?.results || []).length;
+
+        setProgress((prev) => ({
+          scanned: prev.scanned + scanned,
+          enriched: prev.enriched + enriched,
+          notFound: prev.notFound + notFound,
+          errors: prev.errors + errors,
+          skipped: prev.skipped, // no explicit "skipped" from this function
+        }));
+
+        lastDoc = snap.docs[snap.docs.length - 1];
+
+        // Gentle pacing for TMDB rate limits
+        await new Promise((r) => setTimeout(r, 500));
+      }
+    };
+
     try {
       // Phase 1: Movies/episodes
       await runMediaScan(null);
@@ -100,6 +175,9 @@ export function LibraryMaintenance() {
       // Phase 2: Shows
       const idToken = await user.getIdToken(true);
       await runShowScan(null, idToken);
+
+      // Phase 3: Episodes (populate episodeTitle/Description/Thumbnail)
+      await runEpisodeScan(idToken);
 
       setIsComplete(true);
     } catch (err: any) {

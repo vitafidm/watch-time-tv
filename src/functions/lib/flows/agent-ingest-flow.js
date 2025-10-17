@@ -110,6 +110,11 @@ const MediaItemSchema = zod_1.z.object({
     backdropUrl: zod_1.z.string().url().optional(),
     tmdbId: zod_1.z.number().int().optional(),
     addedAt: zod_1.z.union([zod_1.z.string().datetime(), zod_1.z.number()]).optional(),
+    // ---- NEW: accept episode fields on input (we still default to null on write) ----
+    episodeTitle: zod_1.z.string().nullable().optional(),
+    episodeDescription: zod_1.z.string().nullable().optional(),
+    // Allow either TMDB still_path or a full URL later; do NOT require url() here.
+    episodeThumbnail: zod_1.z.string().nullable().optional(),
     // helper fields (server-computed)
     librarySection: zod_1.z.enum(['movies', 'tv']).optional(),
     normalizedTitle: zod_1.z.string().nullable().optional(),
@@ -211,17 +216,17 @@ async function agentIngestFlow(rawInput) {
             }
             const recomputeHelpers = !existingDoc || existingDoc.type !== item.type;
             // librarySection
-            if (recomputeHelpers || existingDoc.librarySection === undefined) {
+            if (recomputeHelpers || existingDoc?.librarySection === undefined) {
                 dataToUpsert.librarySection = deriveLibrarySection(item.path);
             }
             if (item.type === 'episode') {
                 // season/episodeNumber parse
-                if (recomputeHelpers || existingDoc.season === undefined || existingDoc.episodeNumber === undefined) {
+                if (recomputeHelpers || existingDoc?.season === undefined || existingDoc?.episodeNumber === undefined) {
                     const parsed = (0, episodeParser_1.parseEpisodeFromName)(item.filename);
                     dataToUpsert.season = parsed.season;
                     dataToUpsert.episodeNumber = parsed.episodeNumber;
                 }
-                if (recomputeHelpers || existingDoc.normalizedTitle === undefined) {
+                if (recomputeHelpers || existingDoc?.normalizedTitle === undefined) {
                     dataToUpsert.normalizedTitle = null; // episodes keep null here
                 }
                 // scoring (only if not set already)
@@ -237,10 +242,10 @@ async function agentIngestFlow(rawInput) {
             }
             else {
                 // movie
-                if (recomputeHelpers || existingDoc.normalizedTitle === undefined) {
+                if (recomputeHelpers || existingDoc?.normalizedTitle === undefined) {
                     dataToUpsert.normalizedTitle = (0, normalizeTitle_1.normalizeTitle)({ filename: item.filename, path: item.path, type: 'movie', year: item.year ?? null });
                 }
-                if (recomputeHelpers || existingDoc.season === undefined || existingDoc.episodeNumber === undefined) {
+                if (recomputeHelpers || existingDoc?.season === undefined || existingDoc?.episodeNumber === undefined) {
                     dataToUpsert.season = null;
                     dataToUpsert.episodeNumber = null;
                 }
@@ -255,6 +260,17 @@ async function agentIngestFlow(rawInput) {
                     dataToUpsert.matchMethod = dataToUpsert.normalizedTitle ? 'title+year' : null;
                 }
             }
+            // ---- NEW: ensure the three episode fields exist on every new/updated doc without clobbering non-null values ----
+            if (existingDoc?.episodeTitle === undefined && dataToUpsert.episodeTitle === undefined) {
+                dataToUpsert.episodeTitle = null;
+            }
+            if (existingDoc?.episodeDescription === undefined && dataToUpsert.episodeDescription === undefined) {
+                dataToUpsert.episodeDescription = null;
+            }
+            if (existingDoc?.episodeThumbnail === undefined && dataToUpsert.episodeThumbnail === undefined) {
+                dataToUpsert.episodeThumbnail = null;
+            }
+            // ---------------------------------------------------------------------------------------
             if (existingDoc?.manualOverride === undefined)
                 dataToUpsert.manualOverride = false;
             if (existingDoc?.matchConfidence === undefined && dataToUpsert.matchConfidence === undefined)

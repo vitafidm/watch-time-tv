@@ -95,26 +95,53 @@ async function tmdbEnrichEpisodes(uid, rawBody) {
                 results.push({ mediaId: it.mediaId, status: "not_found" });
                 continue;
             }
+            // Coalesce to avoid overwriting any existing non-null values.
+            const episodeTitle = media.episodeTitle ?? (details.name || null);
+            const episodeDescription = media.episodeDescription ?? (details.overview || null);
+            const episodeThumbnail = media.episodeThumbnail ?? (pickBestImage(details.still_path) ?? null);
+            // Keep legacy fields for compatibility, but do not clobber if already present.
+            const title = media.title ?? (details.name || null);
+            const overview = media.overview ?? (details.overview || null);
+            const stillUrl = media.stillUrl ?? (pickBestImage(details.still_path) ?? null);
             const payload = {
-                title: details.name || media.title || null,
-                overview: details.overview || media.overview || null,
-                stillUrl: pickBestImage(details.still_path) ?? media.stillUrl ?? null,
-                airDate: details.air_date || media.airDate || null,
-                season: it.season,
-                episode: it.episode,
-                tmdbShowId: it.showId,
-                tmdbEpisodeId: details.id,
-                cast: (details.credits?.cast || []).slice(0, 10).map((c) => ({
-                    name: c.name,
-                    character: c.character,
-                    profileUrl: pickBestImage(c.profile_path),
-                })),
+                // NEW episode-specific fields
+                episodeTitle,
+                episodeDescription,
+                episodeThumbnail,
+                // Legacy fields (safe, non-destructive)
+                title,
+                overview,
+                stillUrl,
+                // Common metadata
+                airDate: media.airDate ?? details.air_date ?? null,
+                season: media.season ?? it.season,
+                episode: media.episode ?? it.episode, // keep existing 'episode' if you already use it
+                episodeNumber: media.episodeNumber ?? it.episode, // also backfill episodeNumber if missing
+                tmdbShowId: media.tmdbShowId ?? it.showId,
+                tmdbEpisodeId: media.tmdbEpisodeId ?? details.id,
+                // Cast (top 10)
+                cast: media.cast ?? (Array.isArray(details?.credits?.cast)
+                    ? details.credits.cast.slice(0, 10).map((c) => ({
+                        name: c.name,
+                        character: c.character,
+                        profileUrl: pickBestImage(c.profile_path),
+                    }))
+                    : []),
+                // Bookkeeping for maintenance
+                episodeFieldsEnriched: true,
+                episodeFieldsEnrichedAt: admin.firestore.FieldValue.serverTimestamp(),
+                lastEnrichError: null,
                 updatedAt: admin.firestore.FieldValue.serverTimestamp(),
             };
             await mediaRef.set(payload, { merge: true });
             results.push({ mediaId: it.mediaId, status: "enriched" });
         }
         catch (err) {
+            // Log error into doc without blowing away prior success state
+            await mediaRef.set({
+                lastEnrichError: err?.message || "TMDB error",
+                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            }, { merge: true });
             results.push({ mediaId: it.mediaId, status: "error", message: err?.message || "TMDB error" });
         }
     }

@@ -207,3 +207,5 @@ exports.tmdbFixShow = tmdbFixShow;
 exports.materializeUserShowsFromFolders = materializeUserShowsFromFolders;
 exports.tmdbEnrichShows = tmdbEnrichShows;
 exports.triggerAgentSync = triggerAgentSync;
+export { startPlayback } from "./flows/start-playback";
+

@@ -1,4 +1,3 @@
-
 import * as crypto from 'crypto';
 import * as admin from 'firebase-admin';
 import { z } from 'zod';
@@ -80,6 +79,12 @@ const MediaItemSchema = z.object({
   backdropUrl: z.string().url().optional(),
   tmdbId: z.number().int().optional(),
   addedAt: z.union([z.string().datetime(), z.number()]).optional(),
+
+  // ---- NEW: accept episode fields on input (we still default to null on write) ----
+  episodeTitle: z.string().nullable().optional(),
+  episodeDescription: z.string().nullable().optional(),
+  // Allow either TMDB still_path or a full URL later; do NOT require url() here.
+  episodeThumbnail: z.string().nullable().optional(),
 
   // helper fields (server-computed)
   librarySection: z.enum(['movies','tv']).optional(),
@@ -189,7 +194,7 @@ export async function agentIngestFlow(rawInput: unknown): Promise<{ results: Ing
         serverId,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       };
-      
+
       if (dataToUpsert.tmdbId === undefined) {
         dataToUpsert.tmdbId = null;
       }
@@ -201,18 +206,18 @@ export async function agentIngestFlow(rawInput: unknown): Promise<{ results: Ing
       const recomputeHelpers = !existingDoc || existingDoc.type !== item.type;
 
       // librarySection
-      if (recomputeHelpers || existingDoc.librarySection === undefined) {
+      if (recomputeHelpers || existingDoc?.librarySection === undefined) {
         dataToUpsert.librarySection = deriveLibrarySection(item.path);
       }
 
       if (item.type === 'episode') {
         // season/episodeNumber parse
-        if (recomputeHelpers || existingDoc.season === undefined || existingDoc.episodeNumber === undefined) {
+        if (recomputeHelpers || existingDoc?.season === undefined || existingDoc?.episodeNumber === undefined) {
           const parsed = parseEpisodeFromName(item.filename);
           dataToUpsert.season = parsed.season;
           dataToUpsert.episodeNumber = parsed.episodeNumber;
         }
-        if (recomputeHelpers || existingDoc.normalizedTitle === undefined) {
+        if (recomputeHelpers || existingDoc?.normalizedTitle === undefined) {
           dataToUpsert.normalizedTitle = null; // episodes keep null here
         }
 
@@ -229,10 +234,10 @@ export async function agentIngestFlow(rawInput: unknown): Promise<{ results: Ing
 
       } else {
         // movie
-        if (recomputeHelpers || existingDoc.normalizedTitle === undefined) {
+        if (recomputeHelpers || existingDoc?.normalizedTitle === undefined) {
           dataToUpsert.normalizedTitle = normalizeTitle({ filename: item.filename, path: item.path, type: 'movie', year: item.year ?? null });
         }
-        if (recomputeHelpers || existingDoc.season === undefined || existingDoc.episodeNumber === undefined) {
+        if (recomputeHelpers || existingDoc?.season === undefined || existingDoc?.episodeNumber === undefined) {
           dataToUpsert.season = null;
           dataToUpsert.episodeNumber = null;
         }
@@ -248,6 +253,18 @@ export async function agentIngestFlow(rawInput: unknown): Promise<{ results: Ing
           dataToUpsert.matchMethod = dataToUpsert.normalizedTitle ? 'title+year' : null;
         }
       }
+
+      // ---- NEW: ensure the three episode fields exist on every new/updated doc without clobbering non-null values ----
+      if (existingDoc?.episodeTitle === undefined && dataToUpsert.episodeTitle === undefined) {
+        dataToUpsert.episodeTitle = null;
+      }
+      if (existingDoc?.episodeDescription === undefined && dataToUpsert.episodeDescription === undefined) {
+        dataToUpsert.episodeDescription = null;
+      }
+      if (existingDoc?.episodeThumbnail === undefined && dataToUpsert.episodeThumbnail === undefined) {
+        dataToUpsert.episodeThumbnail = null;
+      }
+      // ---------------------------------------------------------------------------------------
 
       if (existingDoc?.manualOverride === undefined) dataToUpsert.manualOverride = false;
       if (existingDoc?.matchConfidence === undefined && dataToUpsert.matchConfidence === undefined) dataToUpsert.matchConfidence = null;

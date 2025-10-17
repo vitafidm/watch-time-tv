@@ -36,6 +36,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.startPlayback = void 0;
 require("./preinit-admin"); // <-- MUST be first: ensure admin.initializeApp() runs before any flow
 const functions = __importStar(require("firebase-functions"));
 const admin = __importStar(require("firebase-admin"));
@@ -252,3 +253,5 @@ exports.tmdbFixShow = tmdbFixShow_1.default;
 exports.materializeUserShowsFromFolders = materializeUserShowsFromFolders_1.default;
 exports.tmdbEnrichShows = tmdbEnrichShows_1.default;
 exports.triggerAgentSync = triggerAgentSync_1.default;
+var start_playback_1 = require("./flows/start-playback");
+Object.defineProperty(exports, "startPlayback", { enumerable: true, get: function () { return start_playback_1.startPlayback; } });
