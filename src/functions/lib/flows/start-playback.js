@@ -123,7 +123,8 @@ exports.startPlayback = (0, https_1.onRequest)({
         }, privateKey, { algorithm: "RS256" });
         // 5) Build URL to your NAS HLS endpoint
         const baseUrl = baseUrlRaw.endsWith("/") ? baseUrlRaw.slice(0, -1) : baseUrlRaw;
-        const url = `${baseUrl}/hls/${encodeURIComponent(mediaId)}/index.m3u8?token=${encodeURIComponent(token)}`;
+        // CHANGED: use /pc-hls instead of /hls
+        const url = `${baseUrl}/pc-hls/${encodeURIComponent(mediaId)}/index.m3u8?token=${encodeURIComponent(token)}`;
         res.status(200).json({ url, expiresAt: exp });
     }
     catch (err) {
