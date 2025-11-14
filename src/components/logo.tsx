@@ -7,7 +7,7 @@ export function Logo() {
         <Film className="h-6 w-6" />
       </div>
       <span className="font-headline text-2xl font-bold tracking-tighter text-foreground">
-        Private Cinema
+        WatchTime
       </span>
     </div>
   );

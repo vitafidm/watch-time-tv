@@ -44,6 +44,41 @@ const ReportSchema = zod_1.z.object({
     duration: zod_1.z.number().positive(),
     finished: zod_1.z.boolean().optional(),
 });
+/**
+ * Helper: absolute path to a user's media collection.
+ */
+function userMediaCol(uid) {
+    return db.collection(`users/${uid}/media`);
+}
+/**
+ * Find the next episode within a show after (season, episode), in ascending order.
+ * Returns the mediaId (preferred) or the document id if mediaId is missing.
+ *
+ * Query shape (requires composite index):
+ *   where("type", "==", "episode")
+ *   where("showRef", "==", showRefPath)
+ *   orderBy("season", "asc")
+ *   orderBy("episode", "asc")
+ *   startAfter(season, episode)
+ *   limit(1)
+ */
+async function findNextEpisodeMediaId(params) {
+    const { uid, showRefPath, season, episode } = params;
+    const q = userMediaCol(uid)
+        .where("type", "==", "episode")
+        .where("showRef", "==", showRefPath)
+        .orderBy("season", "asc")
+        .orderBy("episode", "asc")
+        // NOTE: startAfter with field values must match the orderBy fields
+        .startAfter(season, episode)
+        .limit(1);
+    const snap = await q.get();
+    const doc = snap.docs[0];
+    if (!doc)
+        return null;
+    const d = doc.data() || {};
+    return (typeof d.mediaId === "string" && d.mediaId) || doc.id;
+}
 async function playbackReportFlow(uid, body) {
     const parsed = ReportSchema.safeParse(body);
     if (!parsed.success) {
@@ -52,30 +87,69 @@ async function playbackReportFlow(uid, body) {
         throw e;
     }
     const { mediaId, position, duration, finished } = parsed.data;
+    // Refs used below
     const pbRef = db.doc(`users/${uid}/playback/${mediaId}`);
     const mediaRef = db.doc(`users/${uid}/media/${mediaId}`);
+    // Read media doc FIRST (outside the transaction) to:
+    // - validate existence
+    // - determine episode vs movie
+    // - harvest showRef/season/episode for nextUp computation
+    const mediaSnap = await mediaRef.get();
+    if (!mediaSnap.exists) {
+        const e = new Error("Media not found.");
+        e.code = "failed-precondition";
+        throw e;
+    }
+    const mediaData = mediaSnap.data() || {};
+    const isEpisode = mediaData?.type === "episode";
+    const showRefPath = isEpisode && typeof mediaData?.showRef === "string" ? mediaData.showRef : null;
+    const seasonNum = isEpisode && typeof mediaData?.season === "number" ? mediaData.season : null;
+    const episodeNum = isEpisode && typeof mediaData?.episode === "number" ? mediaData.episode : null;
     const finishThreshold = Math.max(1, Math.floor(0.9 * duration)); // 90%
-    await db.runTransaction(async (tx) => {
-        // read both docs within the txn
-        await tx.get(pbRef);
-        const mediaSnap = await tx.get(mediaRef);
-        if (!mediaSnap.exists) {
-            const e = new Error("Media not found.");
-            e.code = "failed-precondition";
-            throw e;
+    const isFinished = !!finished || position >= finishThreshold;
+    // If we are finishing an EPISODE, pre-compute nextUpEpisodeId outside txn (uses a query).
+    // This avoids mixing query reads inside the write txn.
+    let nextUpEpisodeId = null;
+    if (isFinished && isEpisode && showRefPath && seasonNum != null && episodeNum != null) {
+        try {
+            nextUpEpisodeId = await findNextEpisodeMediaId({
+                uid,
+                showRefPath,
+                season: seasonNum,
+                episode: episodeNum,
+            });
         }
+        catch {
+            // best-effort — nextUp remains null if query fails
+            nextUpEpisodeId = null;
+        }
+    }
+    await db.runTransaction(async (tx) => {
+        // Read playback doc to satisfy transaction read requirements
+        await tx.get(pbRef);
         const now = admin.firestore.FieldValue.serverTimestamp();
-        const isFinished = !!finished || position >= finishThreshold;
         if (!isFinished) {
+            // Upsert playback progress
             tx.set(pbRef, {
                 mediaId,
                 lastPosition: position,
                 duration,
                 lastPlayedAt: now,
             }, { merge: true });
+            // Mirror per-episode progress onto the parent show for instant "Play" from poster
+            if (isEpisode && showRefPath) {
+                const showRef = db.doc(showRefPath);
+                tx.set(showRef, {
+                    lastPlayedEpisodeId: mediaId,
+                    lastPlayedPosition: position,
+                    lastPlayedDuration: duration,
+                    lastPlayedAt: now,
+                }, { merge: true });
+            }
             return;
         }
-        const mediaData = mediaSnap.data() || {};
+        // FINISH PATH
+        // Debounce playCount increment (same as your prior logic)
         const lastFinishedAtMillis = typeof mediaData.lastFinishedAt?.toMillis === "function"
             ? mediaData.lastFinishedAt.toMillis()
             : 0;
@@ -89,7 +163,33 @@ async function playbackReportFlow(uid, body) {
         else {
             tx.update(mediaRef, { lastFinishedAt: now });
         }
+        // Remove the per-media playback record
         tx.delete(pbRef);
+        // Update show progress pointers (episode only)
+        if (isEpisode && showRefPath) {
+            const showRef = db.doc(showRefPath);
+            const showPatch = {
+                lastCompletedEpisodeId: mediaId,
+                lastCompletedAt: now,
+            };
+            if (nextUpEpisodeId) {
+                // We have a next episode → set nextUp and clear lastPlayedPosition (start next at 0)
+                showPatch.nextUpEpisodeId = nextUpEpisodeId;
+                showPatch.lastPlayedEpisodeId = nextUpEpisodeId;
+                showPatch.lastPlayedPosition = 0;
+                showPatch.lastPlayedDuration = admin.firestore.FieldValue.delete();
+                showPatch.lastPlayedAt = now;
+            }
+            else {
+                // No next episode → clear nextUp and clear "lastPlayed*"
+                showPatch.nextUpEpisodeId = null;
+                showPatch.lastPlayedEpisodeId = null;
+                showPatch.lastPlayedPosition = null;
+                showPatch.lastPlayedDuration = null;
+                showPatch.lastPlayedAt = now;
+            }
+            tx.set(showRef, showPatch, { merge: true });
+        }
     });
     return { ok: true };
 }

@@ -1,47 +1,47 @@
-
+// src/components/PlayerDialog.tsx
 "use client";
 
-import * as React from 'react';
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-} from '@/components/ui/dialog';
-import { VideoPlayer } from './VideoPlayer';
+import { Dialog, DialogContent, DialogTitle, DialogClose } from "@/components/ui/dialog";
+import { X } from "lucide-react";
+import { VideoPlayer } from "@/components/VideoPlayer";
+import { useCallback } from "react";
+import { VisuallyHidden } from "@radix-ui/react-visually-hidden";
 
-export type PlayerDialogProps = {
-  mediaId: string | null;
+type Props = {
   open: boolean;
-  onOpenChange: (open: boolean) => void;
+  onOpenChange: (v: boolean) => void;
+  mediaId: string | number | null;
   title?: string;
-  "data-testid"?: string;
+  startTime?: number | null;
 };
 
-export function PlayerDialog({
-  mediaId,
-  open,
-  onOpenChange,
-  title,
-  "data-testid": dataTestId = "player-dialog",
-}: PlayerDialogProps) {
+export function PlayerDialog({ open, onOpenChange, mediaId, title, startTime }: Props) {
+  const handleClose = useCallback(async () => {
+    try {
+      if (document.fullscreenElement) await document.exitFullscreen();
+    } catch {/* noop */}
+    onOpenChange(false);
+  }, [onOpenChange]);
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
-        className="max-w-5xl w-full p-0 border-0 bg-black"
-        data-testid={dataTestId}
-        onOpenAutoFocus={(e) => e.preventDefault()}
-      >
-        {title && (
-          <DialogHeader className="absolute top-0 left-0 z-10 p-4 bg-gradient-to-b from-black/70 to-transparent w-full">
-            <DialogTitle className="text-white text-lg font-bold drop-shadow-md">
-              {title}
-            </DialogTitle>
-          </DialogHeader>
-        )}
-        <div className="aspect-video w-full rounded-lg overflow-hidden">
-            {open && mediaId && <VideoPlayer mediaId={mediaId} />}
+    <Dialog open={open} onOpenChange={(v) => (v ? onOpenChange(v) : handleClose())}>
+      <DialogContent className="max-w-[100vw] w-[100vw] h-[100vh] p-0 bg-black border-none rounded-none">
+        {/* a11y title (hidden visually) */}
+        <VisuallyHidden>
+          <DialogTitle>{title?.trim() || "Video player"}</DialogTitle>
+        </VisuallyHidden>
+
+        
+
+        {/* video */}
+        <div className="absolute inset-0">
+          <VideoPlayer
+            mediaId={mediaId ? String(mediaId) : null}
+            className="h-full w-full"
+            autoPlay
+            controls
+            startAtSeconds={typeof startTime === "number" ? Math.max(0, startTime) : 0}
+          />
         </div>
       </DialogContent>
     </Dialog>

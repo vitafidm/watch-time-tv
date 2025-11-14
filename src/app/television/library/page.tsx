@@ -4,7 +4,7 @@
 import { useAuthUser } from "@/hooks/useAuthUser";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Tv, RefreshCw } from "lucide-react";
+import { Tv, RefreshCw, Play } from "lucide-react";
 import type { MediaDoc } from "@/lib/db.types";
 import { useMemo, useRef, useState, useEffect, useCallback } from "react";
 import Image from "next/image";
@@ -15,7 +15,8 @@ import { MediaEditModal, type MediaEditModalItem } from "@/components/MediaEditM
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { callFunction } from "@/lib/api";
-import { PlayButton } from "@/components/PlayButton";
+//import { PlayButton } from "@/components/PlayButton";
+import { useRouter } from "next/navigation";
 
 // Represents a document from the /users/{uid}/shows collection
 type ShowDoc = {
@@ -30,47 +31,88 @@ type ShowDoc = {
     updatedAt: any; // Firestore Timestamp
 };
 
-function ShowCard({ item, onEdit }: { item: ShowDoc, onEdit: () => void; }) {
-    const displayTitle = item.displayTitle || item.title;
+function ShowCard({ item, onEdit }: { item: ShowDoc; onEdit: () => void }) {
+  const displayTitle = item.displayTitle || item.title;
+  const router = useRouter();
 
-    return (
-        <Link href={`/television/${item.id}`} className="group block" data-testid="show-card">
-            <div className="flex flex-col gap-2">
-                <div className="relative aspect-[2/3] w-full overflow-hidden rounded-lg shadow-lg transition-all duration-300 group-hover:scale-105 group-hover:shadow-primary/40">
-                    <Image
-                        src={item.posterUrl || `https://picsum.photos/500/750?random=${item.id}`}
-                        alt={displayTitle}
-                        width={500}
-                        height={750}
-                        className="object-cover bg-muted"
-                        data-ai-hint="tv show poster"
-                    />
-                    <MediaEditButton onOpen={onEdit} />
-                    <PlayButton asNavigateHref={`/television/${item.id}`} label="Open" />
-                </div>
-                <div className="space-y-1">
-                  <h3 className="font-headline text-base font-bold text-foreground truncate">
-                      {displayTitle}
-                  </h3>
-                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                      <span>{item.episodeCount || 0} {item.episodeCount === 1 ? 'episode' : 'episodes'}</span>
-                  </div>
-                </div>
-            </div>
-        </Link>
-    );
+  return (
+    <Link
+      href={`/television/${item.id}`}
+      className="group block"
+      data-testid="show-card"
+      prefetch={false}
+    >
+      <div className="flex flex-col gap-2">
+        <div className="relative aspect-[2/3] w-full overflow-hidden rounded-lg shadow-lg transition-all duration-300 bg-muted">
+          <Image
+            src={item.posterUrl || `https://picsum.photos/500/750?random=${item.id}`}
+            alt={displayTitle}
+            width={500}
+            height={750}
+            className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.03]"
+            data-ai-hint="tv show poster"
+          />
+
+          {/* Bottom-right 3-dots edit */}
+          <button
+            type="button"
+            onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
+            onClick={(e) => { e.preventDefault(); e.stopPropagation(); onEdit(); }}
+            className="absolute bottom-2 right-2 z-20 rounded-full bg-black/60 px-2 py-1 text-xs text-white opacity-0 transition-opacity duration-200 backdrop-blur group-hover:opacity-100"
+            aria-label="Edit show"
+            title="Edit show"
+          >
+            ●●●
+          </button>
+
+          {/* Center overlay + Play button (button, not Link) */}
+          <div
+            className="pointer-events-none absolute inset-0 z-10 grid place-items-center bg-black/0 opacity-0 transition-opacity duration-200 group-hover:bg-black/45 group-hover:opacity-100 group-focus-within:bg-black/45 group-focus-within:opacity-100"
+            aria-hidden="true"
+          >
+            <button
+              type="button"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();      // don't trigger outer Link
+                router.push(`/television/${item.id}`);
+              }}
+              className="pointer-events-auto inline-flex items-center justify-center h-14 w-14 rounded-full bg-background/60 text-foreground/90 shadow-lg ring-1 ring-border/50 transition hover:bg-background/80 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ring-offset-background"
+              aria-label={`Open ${displayTitle}`}
+            >
+              <Play className="h-8 w-8" aria-hidden="true" />
+            </button>
+          </div>
+        </div>
+
+        <div className="space-y-1">
+          <h3 className="font-headline text-base font-bold text-foreground truncate">
+            {displayTitle}
+          </h3>
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <span>
+              {item.episodeCount || 0} {item.episodeCount === 1 ? "episode" : "episodes"}
+            </span>
+          </div>
+        </div>
+      </div>
+    </Link>
+  );
 }
+
 
 function TvLibrary() {
   const { user } = useAuthUser();
   const { toast } = useToast();
   const [isRefreshing, setIsRefreshing] = useState(false);
 
-  const { items: fetchedShows, loading, hasMore, attachSentinel, resetAndFetch } = useInfiniteFirestore<ShowDoc>({
+  const { items: fetchedShows, loading, hasMore, attachSentinel, resetAndFetch, isFetchingNext, placeholderCount, } = useInfiniteFirestore<ShowDoc>({
       collectionPath: user ? `users/${user.uid}/shows` : undefined,
       where: [['episodeCount', '>', 0]],
       orderBy: ['updatedAt', 'desc'],
       pageSize: 24,
+      overscanPx: 1200,    // start loading well before the gap
+      minRemaining: 6,     // tail skeletons
       map: (doc) => ({ id: doc.id, ...doc.data(), tmdbShowId: Number(doc.id) } as ShowDoc),
   });
 

@@ -1,7 +1,8 @@
 
 "use client"
 
-import { Search, LogOut, Settings, LogIn, Film, Tv } from "lucide-react";
+import React from "react";
+import { Search, LogOut, Settings, LogIn, Film, Tv, Layers } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { useSearch } from "@/hooks/use-search";
 import { Button } from "./ui/button";
@@ -11,6 +12,7 @@ import { MainNav } from "./main-nav";
 import { Logo } from "./logo";
 import Link from "next/link";
 import { useAuthUser } from "@/hooks/useAuthUser";
+import SearchResultsPopover from "@/components/SearchResultsPopover";
 
 export function AppHeader() {
   const { searchTerm, setSearchTerm } = useSearch();
@@ -30,6 +32,7 @@ export function AppHeader() {
         <div className="relative flex-1">
           <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
           <Input
+            id="global-nav-search"
             type="search"
             placeholder="Search..."
             className="w-full rounded-lg bg-background pl-8 md:w-[200px] lg:w-[300px]"
@@ -37,6 +40,16 @@ export function AppHeader() {
             onChange={(e) => setSearchTerm(e.target.value)}
           />
         </div>
+
+        <SearchResultsPopover
+            anchorId="global-nav-search"
+            makeHref={({ id, kind }) => (kind === "movie" ? `/movies/${id}` : `/television/${id}`)}
+            onSelect={() => {
+              // optional: clear the input once a result is chosen
+              // setSearchTerm("");
+            }}
+          />
+        
 
         <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -57,6 +70,9 @@ export function AppHeader() {
                         </DropdownMenuItem>
                         <DropdownMenuItem asChild>
                             <Link href="/television/library"><Tv className="mr-2 h-4 w-4" />TV Library</Link>
+                        </DropdownMenuItem>
+                        <DropdownMenuItem asChild>
+                            <Link href="/collections"><Layers className="mr-2 h-4 w-4" />Collections</Link>
                         </DropdownMenuItem>
                         <DropdownMenuSeparator />
                         <DropdownMenuItem asChild>

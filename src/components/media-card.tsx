@@ -1,40 +1,194 @@
+// src/components/media-card.tsx
+"use client";
 
-import Link from 'next/link';
-import Image from 'next/image';
-import type { MediaItem } from '@/lib/types';
-import { WatchlistButton } from './watchlist-button';
-import { Star } from 'lucide-react';
+import Link from "next/link";
+import Image from "next/image";
+import type { MediaItem } from "@/lib/types";
+import { WatchlistButton } from "./watchlist-button";
+import { MoreHorizontal, Play, RotateCcw } from "lucide-react";
+import * as React from "react";
+import { cn } from "@/lib/utils";
 
 interface MediaCardProps {
   item: MediaItem;
+  href?: string | null;
+  showTitle?: boolean;
+  showYear?: boolean;
+  showWatchlist?: boolean;
+  onPlay?: (opts?: { startTime?: number; restart?: boolean }) => void;
+  onEditMedia?: (() => void) | null;
+
+  /** NEW: resume/progress */
+  progressPercent?: number;          // 0..100
+  resumeSeconds?: number | null;     // if present and >=10, show Resume affordance
+  onRestart?: (() => void) | null;   // optional explicit restart action
 }
 
-export function MediaCard({ item }: MediaCardProps) {
+export function MediaCard({
+  item,
+  href = `/media/${item.id}`,
+  showTitle = true,
+  showYear = true,
+  showWatchlist = true,
+  onPlay,
+  onEditMedia,
+  progressPercent,
+  resumeSeconds,
+  onRestart,
+}: MediaCardProps) {
+  const poster =
+    typeof item.poster_path === "string" ? item.poster_path.trim() : "";
+
+  const hasResume = typeof resumeSeconds === "number" && resumeSeconds >= 10;
+  const pct = Math.max(0, Math.min(100, Math.floor(progressPercent ?? 0)));
+
+  const Wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+    href ? (
+      <Link href={href} className="group block" prefetch={false}>
+        {children}
+      </Link>
+    ) : (
+      <div className="group block">{children}</div>
+    );
+
   return (
-    <Link href={`/media/${item.id}`} className="group block" prefetch={false}>
+    <Wrapper>
       <div className="flex flex-col gap-2">
-        <div className="relative aspect-[2/3] w-full overflow-hidden rounded-lg shadow-lg transition-all duration-300 group-hover:scale-105 group-hover:shadow-primary/40">
-          <Image
-            src={item.poster_path}
-            alt={item.title}
-            width={500}
-            height={750}
-            className="object-cover"
-            data-ai-hint={`${item.media_type} poster`}
-          />
-          <div className="absolute top-2 right-2 z-10 opacity-0 transition-opacity duration-300 group-hover:opacity-100">
-            <WatchlistButton item={item} asIcon />
-          </div>
+        <div className="relative aspect-[2/3] w-full overflow-hidden rounded-lg shadow-lg bg-muted">
+          {poster ? (
+            <Image
+              src={poster}
+              alt={item.title}
+              fill
+              className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.03]"
+              sizes="(max-width: 640px) 60vw, (max-width: 1024px) 30vw, 18vw"
+              data-ai-hint={`${item.media_type} poster`}
+            />
+          ) : (
+            <div className="absolute inset-0 grid place-items-center text-xs text-muted-foreground">
+              No poster
+            </div>
+          )}
+
+          {/* Hover overlay */}
+          {onPlay && (
+            <div
+              className="
+                absolute inset-0 z-10 grid place-items-center
+                pointer-events-none opacity-0 transition-opacity duration-200
+                group-hover:opacity-100 group-focus-within:opacity-100
+                will-change-opacity
+              "
+              aria-hidden="true"
+            >
+              <div className="absolute inset-0 bg-black/45 rounded-lg" />
+
+              {/* Main action = Resume if available; else Play */}
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.preventDefault(); e.stopPropagation();
+                  onPlay(hasResume ? { startTime: resumeSeconds ?? undefined } : undefined);
+                }}
+                className={cn(
+                  "pointer-events-auto inline-flex items-center justify-center",
+                  "h-14 rounded-full px-5 bg-black/70 text-white shadow-lg backdrop-blur",
+                  "transition-transform hover:scale-105",
+                )}
+                aria-label={`${hasResume ? "Resume" : "Play"} ${item.title}`}
+              >
+                <Play className="h-5 w-5 mr-2" aria-hidden="true" />
+                <span className="text-sm font-bold">
+                  {hasResume ? "Resume" : "Play"}
+                </span>
+              </button>
+
+              {/* Secondary: Restart (only when resume exists) */}
+              {hasResume && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.preventDefault(); e.stopPropagation();
+                    if (onRestart) onRestart();
+                    else onPlay?.({ startTime: 0, restart: true });
+                  }}
+                  className="
+                    pointer-events-auto absolute bottom-2 right-2
+                    inline-flex items-center gap-1 rounded-full
+                    bg-black/60 px-2 py-1 text-xs text-white
+                    shadow-sm ring-1 ring-white/10
+                  "
+                  title="Restart from beginning"
+                  aria-label="Restart"
+                >
+                  <RotateCcw className="h-3.5 w-3.5" />
+                  Restart
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* Edit dots OR watchlist */}
+          {onEditMedia ? (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.preventDefault(); e.stopPropagation();
+                onEditMedia();
+              }}
+              className="
+                absolute bottom-2 right-2 z-20
+                rounded-full bg-black/60 px-2 py-1 text-xs text-white
+                opacity-0 transition-opacity duration-200
+                group-hover:opacity-100
+              "
+              aria-label="Edit media"
+              title="Edit media"
+            >
+              ●●●
+            </button>
+          ) : (
+            showWatchlist && (
+              <div
+                className="
+                  absolute right-2 top-2 z-20
+                  opacity-0 transition-opacity duration-200
+                  group-hover:opacity-100
+                "
+              >
+                <WatchlistButton item={item} asIcon />
+              </div>
+            )
+          )}
+
+          {/* Bottom progress bar (visible always if pct > 0) */}
+          {pct > 0 && pct < 100 && (
+            <div className="absolute inset-x-0 bottom-0 h-1.5 bg-black/30">
+              <div
+                className="h-full bg-white/90"
+                style={{ width: `${pct}%` }}
+                aria-hidden="true"
+              />
+            </div>
+          )}
         </div>
-        <div className="space-y-1">
-          <h3 className="font-headline text-base font-bold text-foreground truncate">
-            {item.title}
-          </h3>
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <span>{new Date(item.release_date).getFullYear()}</span>
+
+        {/* Meta */}
+        {showTitle && (
+          <div className="space-y-1 px-0.5">
+            <h3 className="truncate font-headline text-base font-bold text-foreground">
+              {item.title}
+            </h3>
+            {showYear && item.release_date ? (
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <span>{new Date(item.release_date).getFullYear()}</span>
+              </div>
+            ) : null}
           </div>
-        </div>
+        )}
       </div>
-    </Link>
+    </Wrapper>
   );
 }
+
+export default MediaCard;

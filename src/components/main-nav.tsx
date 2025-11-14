@@ -6,8 +6,16 @@ import { cn } from "@/lib/utils";
 
 const menuItems = [
   {
-    href: "/",
-    label: "Browse",
+    href: "/movies/library",
+    label: "Movies",
+  },
+  {
+    href: "/television/library",
+    label: "Shows",
+  },
+  {
+    href: "/collections",
+    label: "Collections",
   },
   {
     href: "/watchlist",
