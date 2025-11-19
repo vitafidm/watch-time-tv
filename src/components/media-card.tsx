@@ -5,7 +5,7 @@ import Link from "next/link";
 import Image from "next/image";
 import type { MediaItem } from "@/lib/types";
 import { WatchlistButton } from "./watchlist-button";
-import { MoreHorizontal, Play, RotateCcw } from "lucide-react";
+import { Play, Check } from "lucide-react";
 import * as React from "react";
 import { cn } from "@/lib/utils";
 
@@ -18,10 +18,15 @@ interface MediaCardProps {
   onPlay?: (opts?: { startTime?: number; restart?: boolean }) => void;
   onEditMedia?: (() => void) | null;
 
-  /** NEW: resume/progress */
+  /** Resume/progress */
   progressPercent?: number;          // 0..100
   resumeSeconds?: number | null;     // if present and >=10, show Resume affordance
-  onRestart?: (() => void) | null;   // optional explicit restart action
+
+  /** Optional explicit restart action (kept for compatibility, not used here) */
+  onRestart?: (() => void) | null;
+
+  /** NEW: explicit “mark as watched” action */
+  onMarkWatched?: (() => void) | null;
 }
 
 export function MediaCard({
@@ -35,6 +40,7 @@ export function MediaCard({
   progressPercent,
   resumeSeconds,
   onRestart,
+  onMarkWatched,
 }: MediaCardProps) {
   const poster =
     typeof item.poster_path === "string" ? item.poster_path.trim() : "";
@@ -87,13 +93,18 @@ export function MediaCard({
               <button
                 type="button"
                 onClick={(e) => {
-                  e.preventDefault(); e.stopPropagation();
-                  onPlay(hasResume ? { startTime: resumeSeconds ?? undefined } : undefined);
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onPlay(
+                    hasResume
+                      ? { startTime: resumeSeconds ?? undefined }
+                      : undefined
+                  );
                 }}
                 className={cn(
                   "pointer-events-auto inline-flex items-center justify-center",
                   "h-14 rounded-full px-5 bg-black/70 text-white shadow-lg backdrop-blur",
-                  "transition-transform hover:scale-105",
+                  "transition-transform hover:scale-105"
                 )}
                 aria-label={`${hasResume ? "Resume" : "Play"} ${item.title}`}
               >
@@ -103,26 +114,26 @@ export function MediaCard({
                 </span>
               </button>
 
-              {/* Secondary: Restart (only when resume exists) */}
-              {hasResume && (
+              {/* NEW: Mark as watched pill (top-right, only when we have resume AND a handler) */}
+              {hasResume && onMarkWatched && (
                 <button
                   type="button"
                   onClick={(e) => {
-                    e.preventDefault(); e.stopPropagation();
-                    if (onRestart) onRestart();
-                    else onPlay?.({ startTime: 0, restart: true });
+                    e.preventDefault();
+                    e.stopPropagation();
+                    void onMarkWatched();
                   }}
                   className="
-                    pointer-events-auto absolute bottom-2 right-2
+                    pointer-events-auto absolute top-2 right-2
                     inline-flex items-center gap-1 rounded-full
-                    bg-black/60 px-2 py-1 text-xs text-white
-                    shadow-sm ring-1 ring-white/10
+                    bg-black/70 px-2.5 py-1 text-xs font-semibold text-white
+                    shadow-sm ring-1 ring-white/20
                   "
-                  title="Restart from beginning"
-                  aria-label="Restart"
+                  title="Mark as watched"
+                  aria-label="Mark as watched"
                 >
-                  <RotateCcw className="h-3.5 w-3.5" />
-                  Restart
+                  <Check className="h-3.5 w-3.5" />
+                  Mark as watched
                 </button>
               )}
             </div>
@@ -133,7 +144,8 @@ export function MediaCard({
             <button
               type="button"
               onClick={(e) => {
-                e.preventDefault(); e.stopPropagation();
+                e.preventDefault();
+                e.stopPropagation();
                 onEditMedia();
               }}
               className="

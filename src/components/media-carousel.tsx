@@ -38,12 +38,12 @@ interface MediaCarouselProps {
   };
   getItemHref?: (item: MediaItem) => string | null;
 
-  /** CHANGE: onPlay now can receive a startTime/restart flag */
+  // onPlay can receive a startTime/restart flag
   onPlayItem?: (item: MediaItem, opts?: { startTime?: number; restart?: boolean }) => void;
 
   layout?: Layout;
 
-  /** NEW: enable per-card progress via /users/{uid}/playback/{mediaId} */
+  // per-card progress via /users/{uid}/playback/{mediaId}
   enableProgress?: boolean;
   uid?: string | null;
 }
@@ -51,7 +51,9 @@ interface MediaCarouselProps {
 /** Small helper */
 function formatTimeShort(sec: number | undefined) {
   if (!sec || sec <= 0) return "0:00";
-  const s = Math.floor(sec % 60).toString().padStart(2, "0");
+  const s = Math.floor(sec % 60)
+    .toString()
+    .padStart(2, "0");
   const m = Math.floor(sec / 60);
   return `${m}:${s}`;
 }
@@ -68,7 +70,8 @@ function HorizontalCard(props: {
   progressPercent?: number;
   resumeSeconds?: number | null;
 }) {
-  const { item, href, onPlay, onEditMedia, showTitle = true, progressPercent, resumeSeconds } = props;
+  const { item, href, onPlay, onEditMedia, showTitle = true, progressPercent, resumeSeconds } =
+    props;
 
   const img = item.backdrop_path || "";
   const titleText = item.title;
@@ -112,8 +115,15 @@ function HorizontalCard(props: {
             <button
               type="button"
               onClick={(e) => {
-                e.preventDefault(); e.stopPropagation();
-                onPlay(hasResume ? { startTime: resumeSeconds ?? undefined } : undefined);
+                e.preventDefault();
+                e.stopPropagation();
+                onPlay(
+                  hasResume
+                    ? {
+                        startTime: resumeSeconds ?? undefined,
+                      }
+                    : undefined
+                );
               }}
               className="pointer-events-auto inline-flex h-11 items-center rounded-full bg-black/70 px-4 text-sm font-bold text-white shadow-lg backdrop-blur ring-1 ring-white/20 hover:scale-105 transition-transform"
               aria-label={`${hasResume ? "Resume" : "Play"} ${titleText}`}
@@ -122,10 +132,15 @@ function HorizontalCard(props: {
               {hasResume ? `Resume • ${formatTimeShort(resumeSeconds ?? 0)}` : "Play"}
             </button>
 
+            {/* Horizontal cards still keep Restart */}
             {hasResume && (
               <button
                 type="button"
-                onClick={(e) => { e.preventDefault(); e.stopPropagation(); onPlay({ startTime: 0, restart: true }); }}
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onPlay({ startTime: 0, restart: true });
+                }}
                 className="pointer-events-auto absolute bottom-2 right-2 inline-flex items-center gap-1 rounded-full bg-black/60 px-2 py-1 text-xs text-white shadow-sm ring-1 ring-white/10"
                 title="Restart from beginning"
               >
@@ -140,7 +155,8 @@ function HorizontalCard(props: {
           <button
             type="button"
             onClick={(e) => {
-              e.preventDefault(); e.stopPropagation();
+              e.preventDefault();
+              e.stopPropagation();
               onEditMedia();
             }}
             className="absolute bottom-2 right-2 rounded-full bg-black/60 px-2 py-1 text-xs text-white opacity-0 transition-opacity duration-200 group-hover:opacity-100"
@@ -168,7 +184,7 @@ function HorizontalCard(props: {
   );
 }
 
-/** Featured card: add progress + resume chip */
+/** Featured card: hero-like (no Restart), Resume for movies & TV */
 function FeaturedCard(props: {
   item: MediaItem;
   href?: string | null;
@@ -185,7 +201,45 @@ function FeaturedCard(props: {
     : [];
 
   const pct = Math.max(0, Math.min(100, Math.floor(progressPercent ?? 0)));
-  const hasResume = typeof resumeSeconds === "number" && resumeSeconds >= 10;
+
+  const isTv = item.media_type === "tv";
+
+  // --- Resume detection (from playback docs) ---
+  const hasResumeFromTime =
+    typeof resumeSeconds === "number" && Number.isFinite(resumeSeconds) && resumeSeconds >= 10;
+
+  const hasResumeFromPercent =
+    typeof progressPercent === "number" &&
+    Number.isFinite(progressPercent) &&
+    progressPercent >= 1 &&
+    progressPercent < 100;
+
+  // If we have playback progress, that's a true "resume".
+  const hasResume = hasResumeFromTime || hasResumeFromPercent;
+
+  // For movies we safely show time; for TV we omit the timestamp (show just "Resume").
+  const showTimeChip = !isTv && hasResumeFromTime;
+
+  const primaryLabel = hasResume
+    ? showTimeChip
+      ? `Resume • ${formatTimeShort(resumeSeconds ?? 0)}`
+      : "Resume"
+    : isTv
+    ? "Resume" // Fallback label for TV: UX says "Resume", actual start logic is still handled in the parent
+    : "Play";
+
+  const handlePlayClick = (e: React.MouseEvent<HTMLButtonElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!onPlay) return;
+
+    // If we know the resume time, pass it down; otherwise let the parent logic decide
+    if (hasResumeFromTime) {
+      onPlay({ startTime: resumeSeconds ?? 0 });
+    } else {
+      onPlay(undefined);
+    }
+  };
 
   const Content = (
     <div className="group relative w-full">
@@ -231,32 +285,16 @@ function FeaturedCard(props: {
 
             <div className="flex items-center gap-2 pt-1">
               {onPlay && (
-                <>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.preventDefault(); e.stopPropagation();
-                      onPlay(hasResume ? { startTime: resumeSeconds ?? undefined } : undefined);
-                    }}
-                    className="inline-flex h-10 sm:h-11 items-center rounded-md bg-primary px-4 text-sm font-bold text-primary-foreground shadow hover:opacity-95"
-                  >
-                    <Play className="mr-2 h-4 w-4" />
-                    {hasResume ? `Resume • ${formatTimeShort(resumeSeconds ?? 0)}` : "Play"}
-                  </button>
-
-                  {hasResume && (
-                    <button
-                      type="button"
-                      onClick={(e) => { e.preventDefault(); e.stopPropagation(); onPlay({ startTime: 0, restart: true }); }}
-                      className="inline-flex h-10 sm:h-11 items-center rounded-md bg-secondary px-3 text-xs font-bold"
-                      title="Restart from beginning"
-                    >
-                      <RotateCcw className="mr-1 h-3.5 w-3.5" />
-                      Restart
-                    </button>
-                  )}
-                </>
+                <button
+                  type="button"
+                  onClick={handlePlayClick}
+                  className="inline-flex h-10 sm:h-11 items-center rounded-md bg-primary px-4 text-sm font-bold text-primary-foreground shadow hover:opacity-95"
+                >
+                  <Play className="mr-2 h-4 w-4" />
+                  {primaryLabel}
+                </button>
               )}
+
               <WatchlistButton
                 item={item}
                 variant="secondary"
@@ -277,7 +315,8 @@ function FeaturedCard(props: {
           <button
             type="button"
             onClick={(e) => {
-              e.preventDefault(); e.stopPropagation();
+              e.preventDefault();
+              e.stopPropagation();
               onEditMedia();
             }}
             className="absolute top-3 right-3 rounded-full bg-black/60 px-2 py-1 text-xs text-white opacity-0 transition-opacity duration-200 group-hover:opacity-100"
@@ -333,29 +372,26 @@ export function MediaCarousel({
 
   // Attach live playback progress if enabled
   const progressIds = React.useMemo(
-    () => (enableProgress ? normalized.map(i => String(i.id)) : []),
+    () => (enableProgress ? normalized.map((i) => String(i.id)) : []),
     [enableProgress, normalized]
   );
-  
-  const progressMap = usePlaybackProgress(
-    uid ?? null,
-    progressIds,
-    { realtime: false } // <- homepage bars don’t need realtime
-  );
+
+  const progressMap = usePlaybackProgress(uid ?? null, progressIds, {
+    realtime: false, // homepage bars don’t need realtime
+  });
 
   const size: CardSize = cardOverrides?.size ?? "sm";
   const isFeatured = layout === "featured";
 
-  const basisClasses =
-    isFeatured
-      ? "basis-full"
-      : layout === "horizontal"
-      ? size === "lg"
-        ? "basis-[85%] pl-4 sm:basis-[60%] md:basis-1/2 lg:basis-2/5 xl:basis-1/3 2xl:basis-1/4"
-        : "basis-[70%] pl-4 sm:basis-[50%] md:basis-1/3 lg:basis-1/4 xl:basis-1/5 2xl:basis-1/6"
-      : size === "lg"
-      ? "basis-2/3 pl-4 sm:basis-1/2 md:basis-1/3 lg:basis-1/3 xl:basis-1/4 2xl:basis-1/5"
-      : "basis-1/2 pl-4 sm:basis-1/4 md:basis-1/5 lg:basis-1/6 xl:basis-1/7 2xl:basis-[12.5%";
+  const basisClasses = isFeatured
+    ? "basis-full"
+    : layout === "horizontal"
+    ? size === "lg"
+      ? "basis-[85%] pl-4 sm:basis-[60%] md:basis-1/2 lg:basis-2/5 xl:basis-1/3 2xl:basis-1/4"
+      : "basis-[70%] pl-4 sm:basis-[50%] md:basis-1/3 lg:basis-1/4 xl:basis-1/5 2xl:basis-1/6"
+    : size === "lg"
+    ? "basis-2/3 pl-4 sm:basis-1/2 md:basis-1/3 lg:basis-1/3 xl:basis-1/4 2xl:basis-1/5"
+    : "basis-1/2 pl-4 sm:basis-1/4 md:basis-1/5 lg:basis-1/6 xl:basis-1/7 2xl:basis-[12.5%]";
 
   const carouselOpts = React.useMemo(
     () => ({ align: "start" as const, loop, dragFree: isFeatured ? false : true }),
@@ -383,19 +419,22 @@ export function MediaCarousel({
         <CarouselContent className={contentClass}>
           {normalized.map((item) => {
             const prog = progressMap[String(item.id)];
-            const resumeSeconds = prog?.percent && prog.percent >= 1 && prog.percent < 95 ? (prog?.position ?? null) : null;
             const progressPercent = prog?.percent ?? 0;
+            const resumeSeconds =
+              prog && prog.percent >= 1 && prog.percent < 100
+                ? prog.position ?? null
+                : null;
 
-            const onPlay = onPlayItem
-              ? (opts?: { startTime?: number; restart?: boolean }) => onPlayItem(item, opts)
-              : undefined;
+            const onPlay =
+              onPlayItem &&
+              ((opts?: { startTime?: number; restart?: boolean }) =>
+                onPlayItem(item, opts));
 
             const href =
-              getItemHref
-                ? getItemHref(item)
-                : item.media_type === "tv"
+              getItemHref?.(item) ??
+              (item.media_type === "tv"
                 ? `/television/${item.id}`
-                : `/movies/${item.id}`;
+                : `/movies/${item.id}`);
 
             return (
               <CarouselItem key={item.id} className={basisClasses}>
@@ -415,7 +454,9 @@ export function MediaCarousel({
                     onPlay={onPlay}
                     onEditMedia={onEditMedia ? () => onEditMedia(item) : null}
                     showTitle={
-                      cardOverrides?.showTitle !== undefined ? cardOverrides.showTitle : true
+                      cardOverrides?.showTitle !== undefined
+                        ? cardOverrides.showTitle
+                        : true
                     }
                     progressPercent={progressPercent}
                     resumeSeconds={resumeSeconds}
@@ -427,10 +468,14 @@ export function MediaCarousel({
                     onPlay={onPlay}
                     onEditMedia={onEditMedia ? () => onEditMedia(item) : null}
                     showTitle={
-                      cardOverrides?.showTitle !== undefined ? cardOverrides.showTitle : true
+                      cardOverrides?.showTitle !== undefined
+                        ? cardOverrides.showTitle
+                        : true
                     }
                     showYear={
-                      cardOverrides?.showYear !== undefined ? cardOverrides.showYear : true
+                      cardOverrides?.showYear !== undefined
+                        ? cardOverrides.showYear
+                        : true
                     }
                     showWatchlist={
                       cardOverrides?.showWatchlist !== undefined

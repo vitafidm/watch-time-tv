@@ -92,7 +92,7 @@ export async function playbackReportFlow(uid: string, body: unknown) {
     isEpisode && typeof mediaData?.episode === "number" ? mediaData.episode : null;
 
   const finishThreshold = Math.max(1, Math.floor(0.9 * duration)); // 90%
-  const isFinished = !!finished || position >= finishThreshold;
+  const isFinished = !!finished;
 
   // If we are finishing an EPISODE, pre-compute nextUpEpisodeId outside txn (uses a query).
   // This avoids mixing query reads inside the write txn.

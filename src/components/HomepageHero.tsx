@@ -3,6 +3,7 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import Image from 'next/image';
+import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Play } from 'lucide-react';
@@ -11,10 +12,11 @@ import type { MediaItem } from '@/lib/types';
 import { WatchlistButton } from '@/components/watchlist-button';
 
 export type HeroData = {
+  // NOTE: id is optional because some callers may only provide tmdbId
+  id?: string | number;
   title: string;
   overview: string;
   mediaType: 'movie' | 'tv';
-  // Optional extras if you have them
   videoLink?: string | null;
   backdropUrl?: string | null;
   posterUrl?: string | null;
@@ -43,7 +45,6 @@ export function HomepageHero({ item, onPlay }: HomepageHeroProps) {
   const videoId = useMemo(() => getYouTubeId(item.videoLink), [item.videoLink]);
   const [phase, setPhase] = useState<VideoPhase>(videoId ? 'preload' : 'finished');
 
-  // Timed phases (identical to ShowHero)
   useEffect(() => {
     if (!videoId) return;
 
@@ -58,7 +59,7 @@ export function HomepageHero({ item, onPlay }: HomepageHeroProps) {
     }
   }, [phase, videoId]);
 
-  // Build a MediaItem for WatchlistButton (same pattern as ShowHero)
+  // Build a MediaItem for WatchlistButton (same as before)
   const mediaItem: MediaItem = {
     id:
       typeof item.tmdbId === 'number'
@@ -71,8 +72,19 @@ export function HomepageHero({ item, onPlay }: HomepageHeroProps) {
     release_date: item.releaseDate || '',
     vote_average: item.voteAverage || 0,
     genres: item.genres || [],
-    media_type: item.mediaType, // 'movie' | 'tv'
+    media_type: item.mediaType,
   };
+
+  // 🔑 Use whatever ID we actually have: id OR tmdbId
+  const rawDetailId = item.id ?? item.tmdbId;
+  const detailId = rawDetailId != null ? String(rawDetailId) : null;
+
+  const detailHref =
+    detailId && item.mediaType === 'tv'
+      ? `/television/${detailId}`
+      : detailId && item.mediaType === 'movie'
+      ? `/movies/${detailId}` // adjust if your movie route differs
+      : null;
 
   return (
     <div className="relative aspect-video w-full rounded-xl overflow-hidden">
@@ -111,9 +123,22 @@ export function HomepageHero({ item, onPlay }: HomepageHeroProps) {
       {/* Content */}
       <div className="absolute inset-0 flex items-center p-8">
         <div className="w-full max-w-md md:max-w-lg lg:max-w-xl space-y-4">
-          <h1 className="font-headline text-3xl sm:text-4xl md:text-5xl lg:text-6xl font-bold text-foreground drop-shadow-2xl">
-            {item.title}
-          </h1>
+          {/* Title → only a Link if we have a detailHref */}
+          {detailHref ? (
+            <Link
+              href={detailHref}
+              prefetch={false}
+              className="group/headline inline-block"
+            >
+              <h1 className="font-headline text-3xl sm:text-4xl md:text-5xl lg:text-6xl font-bold text-foreground drop-shadow-2xl group-hover/headline:text-foreground/90 transition-colors">
+                {item.title}
+              </h1>
+            </Link>
+          ) : (
+            <h1 className="font-headline text-3xl sm:text-4xl md:text-5xl lg:text-6xl font-bold text-foreground drop-shadow-2xl">
+              {item.title}
+            </h1>
+          )}
 
           <p className="line-clamp-1 sm:line-clamp-3 md:line-clamp-none text-sm sm:text-base text-foreground/80 leading-relaxed drop-shadow-lg">
             {item.overview}
@@ -145,7 +170,11 @@ export function HomepageHero({ item, onPlay }: HomepageHeroProps) {
               Play
             </Button>
 
-            <WatchlistButton item={mediaItem} variant="secondary" className="font-bold" />
+            <WatchlistButton
+              item={mediaItem}
+              variant="secondary"
+              className="font-bold"
+            />
           </div>
         </div>
       </div>

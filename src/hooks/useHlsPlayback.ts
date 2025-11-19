@@ -62,6 +62,25 @@ export function useHlsPlayback(
   const startTargetRef = useRef<number>(0);
   const startSettledRef = useRef<boolean>(false);
 
+  // Keep the desired resume time in a ref so all callbacks see the latest value
+  useEffect(() => {
+    const raw = opts?.startTime;
+    const st =
+      typeof raw === "number" && Number.isFinite(raw) && raw > 0
+        ? raw
+        : 0;
+
+    if (st !== startTargetRef.current) {
+      startTargetRef.current = st;
+
+      if (st > 0) {
+        // New resume target → allow resume to be applied again
+        resumeAppliedRef.current = false;
+        startSettledRef.current = false;
+      }
+    }
+  }, [opts?.startTime]);
+
   // Token bookkeeping
   const lastTokenRef = useRef<string | null>(null);
 
@@ -79,21 +98,24 @@ export function useHlsPlayback(
     if (fragTimerRef.current)  { clearTimeout(fragTimerRef.current);  fragTimerRef.current  = null; }
     if (noProgressTimerRef.current) { clearTimeout(noProgressTimerRef.current); noProgressTimerRef.current = null; }
   }
+
   function armStartWatchdog(onTimeout: () => void) {
     if (startTimerRef.current) clearTimeout(startTimerRef.current);
     startTimerRef.current = setTimeout(onTimeout, START_TIMEOUT_MS);
   }
+
   function armFragWatchdog(onTimeout: () => void) {
     if (fragTimerRef.current) clearTimeout(fragTimerRef.current);
     fragTimerRef.current = setTimeout(onTimeout, NO_FRAG_TIMEOUT_MS);
   }
+
   function armNoProgressWatchdog(video: HTMLVideoElement) {
     if (noProgressTimerRef.current) clearTimeout(noProgressTimerRef.current);
     noProgressTimerRef.current = setTimeout(async () => {
       if (!video || video.paused) { // ✅ DO NOT run if paused
         armNoProgressWatchdog(video); // just re-arm
         return;
-      };
+      }
       const now = Date.now();
       const last = lastTimeupdateRef.current || 0;
       if (now - last >= NO_PROGRESS_MS) {
@@ -115,22 +137,27 @@ export function useHlsPlayback(
 
   function applyStartTimeOnce(video: HTMLVideoElement) {
     if (resumeAppliedRef.current) return;
-    const st = opts?.startTime ?? 0;
+
+    const st = startTargetRef.current;
     if (!Number.isFinite(st) || st <= 0) return;
+
     try {
+      // Seek just before the target to avoid keyframe/PTS edge issues
       video.currentTime = Math.max(0, st - 0.01);
-      startTargetRef.current = st;
-      startSettledRef.current = false;   // we're not settled yet
+
+      startSettledRef.current = false;
       resumeAppliedRef.current = true;
-    } catch {}
+    } catch {
+      // If this fails, our timeupdate-based logic will still update settled state
+    }
   }
 
   function reassertStartIfDrift(video: HTMLVideoElement) {
     if (startSettledRef.current) return;   // ⬅️ stop once settled
-  
+
     const st = startTargetRef.current ?? 0;
     if (!Number.isFinite(st) || st <= 0) return;
-  
+
     const drift = Math.abs(video.currentTime - st);
     // only reassert during the initial attach window (<= ~2s away)
     if (drift > 2 && !video.seeking) {
@@ -139,7 +166,6 @@ export function useHlsPlayback(
       } catch {}
     }
   }
-  
 
   function buildPlaylistUrl(base: string): string {
     const u = asAbsolute(base);
@@ -187,7 +213,7 @@ export function useHlsPlayback(
     [user]
   );
 
-  // Progressive attempt (unchanged)
+  // Progressive attempt: **only** used when starting from 0 (no resume)
   const tryProgressiveAttach = useCallback(
     async (signedUrl: string): Promise<boolean> => {
       if (!mediaId || !videoRef.current) return false;
@@ -228,38 +254,47 @@ export function useHlsPlayback(
       }
 
       if (!resp.ok) return false;
-      const check = (await resp.json().catch(() => null)) as { ok?: boolean; canProgressive?: boolean } | null;
+      const check = (await resp.json().catch(() => null)) as {
+        ok?: boolean;
+        canProgressive?: boolean;
+      } | null;
       if (!check?.ok || !check?.canProgressive) return false;
 
       const u2 = asAbsolute(signedUrl);
-      const mp4Url = `${u2.protocol}//${u2.host}/progress/${encodeURIComponent(mediaId)}.mp4` + (u2.search ? u2.search : "");
+      const mp4Url =
+        `${u2.protocol}//${u2.host}/progress/${encodeURIComponent(mediaId)}.mp4` +
+        (u2.search ? u2.search : "");
 
       const video = videoRef.current!;
       try {
         log("progressive attach start");
         video.src = mp4Url;
         (video as any).playsInline = true;
-                // Seek after metadata so duration/seekable are known
-                await new Promise<void>((resolve) => {
-                  if (video.readyState >= 1 /* HAVE_METADATA */) {
-                    applyStartTimeOnce(video);
-                    resolve();
-                    return;
-                  }
-                  const onMeta = () => {
-                    video.removeEventListener("loadedmetadata", onMeta);
-                    applyStartTimeOnce(video);
-                    resolve();
-                  };
-                  video.addEventListener("loadedmetadata", onMeta);
-                });
-        
-                armNoProgressWatchdog(video);
-                await video.play().catch(() => {});
-                if (!cancelledRef.current) {
-                  clearTimers();
-                  setStatus("ready");
-                }
+
+        // Wait for metadata (no resume here; start from 0)
+        await new Promise<void>((resolve) => {
+          if (video.readyState >= 1 /* HAVE_METADATA */) {
+            resolve();
+            return;
+          }
+          const onMeta = () => {
+            video.removeEventListener("loadedmetadata", onMeta);
+            resolve();
+          };
+          video.addEventListener("loadedmetadata", onMeta);
+        });
+
+        // Feed the no-progress watchdog
+        video.addEventListener("timeupdate", () => {
+          lastTimeupdateRef.current = Date.now();
+        });
+
+        armNoProgressWatchdog(video);
+        await video.play().catch(() => {});
+        if (!cancelledRef.current) {
+          clearTimers();
+          setStatus("ready");
+        }
         log("progressive attach ok");
         return true;
       } catch {
@@ -332,15 +367,15 @@ export function useHlsPlayback(
       hlsRef.current = null;
     }
 
-const hls = new Hls({
-  enableWorker: true,
-  lowLatencyMode: false,
-  backBufferLength: 60,
-  maxBufferLength: 60,
-  startPosition: -1,
-  liveSyncDuration: 10,
-  liveMaxLatencyDuration: 30,
-});
+    const hls = new Hls({
+      enableWorker: true,
+      lowLatencyMode: false,
+      backBufferLength: 60,
+      maxBufferLength: 60,
+      startPosition: -1,
+      liveSyncDuration: 10,
+      liveMaxLatencyDuration: 30,
+    });
 
     // Credentials for signed cookies/tokens
     hls.config.xhrSetup = (xhr) => { try { xhr.withCredentials = true; } catch {} };
@@ -385,7 +420,6 @@ const hls = new Hls({
       await video.play().catch(() => {});
     });
 
-
     hls.on(Hls.Events.LEVEL_LOADED, (_e, d) => {
       log("HLS LEVEL_LOADED", { targetduration: d?.details?.targetduration, live: d?.details?.live });
       clearTimeout(startTimerRef.current as any);
@@ -420,21 +454,21 @@ const hls = new Hls({
         return;
       }
 
-// Try standard recoveries before reloading URL
-if (data?.type === Hls.ErrorTypes.MEDIA_ERROR) {
-  try { 
-    log("fatal media error; recoverMediaError()");
-    hls.recoverMediaError(); 
-    return; 
-  } catch {}
-}
-if (data?.type === Hls.ErrorTypes.NETWORK_ERROR) {
-  try { 
-    log("fatal network error; startLoad()");
-    hls.startLoad(); 
-    return; 
-  } catch {}
-}
+      // Try standard recoveries before reloading URL
+      if (data?.type === Hls.ErrorTypes.MEDIA_ERROR) {
+        try {
+          log("fatal media error; recoverMediaError()");
+          hls.recoverMediaError();
+          return;
+        } catch {}
+      }
+      if (data?.type === Hls.ErrorTypes.NETWORK_ERROR) {
+        try {
+          log("fatal network error; startLoad()");
+          hls.startLoad();
+          return;
+        } catch {}
+      }
 
       // Fatal → try once with a fresh URL
       clearTimers();
@@ -503,10 +537,19 @@ if (data?.type === Hls.ErrorTypes.NETWORK_ERROR) {
       if (!first) return;
       let signedUrl = first.url;
 
-      try {
-        const ok = await tryProgressiveAttach(signedUrl);
-        if (ok) return;
-      } catch {}
+      // If we have a non-zero startTime (Resume), skip progressive
+      // and go straight to HLS, which already handles resume correctly.
+      const wantsResume =
+        typeof opts?.startTime === "number" &&
+        Number.isFinite(opts.startTime) &&
+        opts.startTime > 0;
+
+      if (!wantsResume) {
+        try {
+          const ok = await tryProgressiveAttach(signedUrl);
+          if (ok) return; // progressive MP4 path handled playback
+        } catch {}
+      }
 
       const u0 = asAbsolute(signedUrl);
       const nasOrigin0 = `${u0.protocol}//${u0.host}`;
@@ -574,8 +617,8 @@ if (data?.type === Hls.ErrorTypes.NETWORK_ERROR) {
       );
       video.addEventListener("timeupdate", () => {
         lastTimeupdateRef.current = Date.now();
-      
-        // Once we've progressed >2s past the resume target, stop reasserting forever.
+
+        // Once we've progressed >2s past the resume target, stop treating as unsettled.
         const st = startTargetRef.current ?? 0;
         if (!startSettledRef.current && Number.isFinite(st) && st > 0) {
           if (video.currentTime >= st + 2) {
@@ -605,20 +648,19 @@ if (data?.type === Hls.ErrorTypes.NETWORK_ERROR) {
         });
 
         // Reinforce once enough data is buffered; helps when early PTS shifts occur
-await new Promise<void>((resolve) => {
-  if (video.readyState >= 3 /* HAVE_FUTURE_DATA */) {
-    reassertStartIfDrift(video);
-    resolve();
-    return;
-  }
-  const onCanplay = () => {
-    video.removeEventListener("canplay", onCanplay);
-    reassertStartIfDrift(video);
-    resolve();
-  };
-  video.addEventListener("canplay", onCanplay);
-});
-
+        await new Promise<void>((resolve) => {
+          if (video.readyState >= 3 /* HAVE_FUTURE_DATA */) {
+            reassertStartIfDrift(video);
+            resolve();
+            return;
+          }
+          const onCanplay = () => {
+            video.removeEventListener("canplay", onCanplay);
+            reassertStartIfDrift(video);
+            resolve();
+          };
+          video.addEventListener("canplay", onCanplay);
+        });
 
         armNoProgressWatchdog(video);
         // If native attach stalls...
@@ -660,9 +702,19 @@ await new Promise<void>((resolve) => {
     } finally {
       attachInFlight.current = false;
     }
-  }, [mediaId, authLoading, user, fetchUrl, waitForReady, tryProgressiveAttach, status, attachWithHlsJs]);
+  }, [
+    mediaId,
+    authLoading,
+    user,
+    fetchUrl,
+    waitForReady,
+    tryProgressiveAttach,
+    status,
+    attachWithHlsJs,
+    opts?.startTime,
+  ]);
 
-  // Kick off / cleanup (unchanged except logs)
+  // Kick off / cleanup
   useEffect(() => {
     cancelledRef.current = false;
     resumeAppliedRef.current = false;
@@ -753,9 +805,9 @@ await new Promise<void>((resolve) => {
         if (isTrueSafari() && v.canPlayType("application/vnd.apple.mpegurl")) {
           const wasPaused = v.paused;
           const prevCT = Number.isFinite(v.currentTime) ? v.currentTime : 0;
-        
+
           v.src = refreshed;
-        
+
           await new Promise<void>((resolve) => {
             if (v.readyState >= 1 /* HAVE_METADATA */) {
               resolve();
@@ -767,10 +819,10 @@ await new Promise<void>((resolve) => {
             };
             v.addEventListener("loadedmetadata", onMeta);
           });
-        
+
           // Do NOT re-apply initial startTime here; just preserve where the user was.
           try { if (prevCT > 0) v.currentTime = prevCT; } catch {}
-        
+
           if (!wasPaused) await v.play().catch(() => {});
         } else if (hlsRef.current) {
           const prevCT = Number.isFinite(v.currentTime) ? v.currentTime : 0;

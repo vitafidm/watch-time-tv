@@ -41,6 +41,7 @@ exports.searchMovie = searchMovie;
 exports.searchTV = searchTV;
 exports.movieDetails = movieDetails;
 exports.tvDetails = tvDetails;
+exports.tvEpisodeDetails = tvEpisodeDetails;
 exports.posterUrl = posterUrl;
 exports.backdropUrl = backdropUrl;
 // functions/src/tmdbClient.ts
@@ -63,7 +64,7 @@ function getApiKey() {
     const fromEnv = process.env.TMDB_API_KEY;
     if (fromEnv)
         return fromEnv;
-    throw new Error("TMDB API key not found. Set with `firebase functions:config:set tmdb.key=\"YOUR_KEY\"` " +
+    throw new Error('TMDB API key not found. Set with `firebase functions:config:set tmdb.key="YOUR_KEY"` ' +
         "or set TMDB_API_KEY in your environment.");
 }
 /**
@@ -88,7 +89,7 @@ async function tmdbFetch(path, params = {}) {
         try {
             res = await (0, node_fetch_1.default)(url.toString(), {
                 headers: {
-                    "Accept": "application/json",
+                    Accept: "application/json",
                     // Helps TMDB support know who you are if needed; optional:
                     "User-Agent": "watchtime-functions/1.0",
                 },
@@ -165,7 +166,16 @@ async function movieDetails(id) {
 }
 async function tvDetails(id) {
     // includes aggregate_credits/videos/images to align with Fix Match & enrichment parity
-    return tmdbFetch(`tv/${id}`, { append_to_response: "videos,aggregate_credits,images" });
+    return tmdbFetch(`tv/${id}`, {
+        append_to_response: "videos,aggregate_credits,images",
+    });
+}
+/**
+ * 🔹 Per-episode details for a TV show.
+ * Returns TMDB's raw payload with fields like name, overview, still_path, etc.
+ */
+async function tvEpisodeDetails(tvId, seasonNumber, episodeNumber) {
+    return tmdbFetch(`tv/${tvId}/season/${seasonNumber}/episode/${episodeNumber}`);
 }
 // ---- Image helpers ----
 function posterUrl(path, size = "w500") {

@@ -560,18 +560,23 @@ export default function BrowsePage() {
             }
             enableProgress
             uid={uid}
-            onPlayItem={async (it) => {
+            onPlayItem={async (it, opts) => {
               if (!uid) return;
-
+      
               // MOVIE: id is already a streamable mediaId
               if (it.media_type !== "tv") {
                 setSelectedMediaId(it.id);
-                setSelectedStartTime(null); // clear any prior resume
+      
+                // ✅ Respect the resume time sent from the card (MediaCarousel / MediaCard)
+                const startTime =
+                  typeof opts?.startTime === "number" ? opts.startTime : null;
+      
+                setSelectedStartTime(startTime);
                 setSelectedTitle(it.title);
                 setPlayerOpen(true);
                 return;
               }
-
+      
               // TV: resolve via show-level helper (nextUp -> lastPlayed -> first)
               try {
                 const showRefPath = `users/${uid}/shows/${it.id}`;

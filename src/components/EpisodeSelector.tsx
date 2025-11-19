@@ -1,60 +1,165 @@
+// src/components/EpisodeSelector.tsx
+"use client";
 
-'use client';
+import { useState, useMemo, useEffect } from "react";
+import type { MediaDoc } from "@/lib/db.types";
+import { Card, CardContent } from "@/components/ui/card";
+import {
+  Carousel,
+  CarouselContent,
+  CarouselItem,
+} from "@/components/ui/carousel";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Play } from "lucide-react";
+import Image from "next/image";
+import { useAuthUser } from "@/hooks/useAuthUser";
+import { callFunction } from "@/lib/api";
 
-import { useState, useMemo } from 'react';
-import type { MediaDoc } from '@/lib/db.types';
-import { Card, CardContent } from '@/components/ui/card';
-import { Carousel, CarouselContent, CarouselItem } from '@/components/ui/carousel';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Button } from '@/components/ui/button';
-import { Play } from 'lucide-react';
-import Image from 'next/image';
+// --- Types -------------------------------------------------------------------
+
+type EpisodeMeta = {
+  season: number;
+  episode: number;
+  name?: string | null;
+  overview?: string | null;
+  stillUrl?: string | null;
+};
+
+// Episodes can be decorated with resume data
+export type EpisodeWithResume = MediaDoc & {
+  resumeSeconds?: number;
+  /** 0–100 */
+  progressPercent?: number;
+};
 
 interface EpisodeSelectorProps {
-  episodes: MediaDoc[];
+  episodes: EpisodeWithResume[];
+  /** TMDB show id (e.g., 12971 for Dragon Ball Z) */
+  tmdbShowId?: number | null;
+  /** Called when user clicks play/resume on an episode */
+  onPlay?: (episode: EpisodeWithResume) => void;
 }
 
-function EpisodeCard({ episode }: { episode: MediaDoc }) {
+// NOTE: keys here must match what tmdbEpisodeDetailsBatch returns.
+// From your logs, it returns keys like "S1E1", "S1E2", etc.
+function episodeKey(season: number | undefined, episode: number | undefined) {
+  if (season == null || episode == null) return "";
+  return `S${season}E${episode}`;
+}
+
+// --- Episode card with resume UI --------------------------------------------
+
+function EpisodeCard({
+  episode,
+  meta,
+  onClick,
+}: {
+  episode: EpisodeWithResume;
+  meta?: EpisodeMeta;
+  onClick?: () => void;
+}) {
+  const displayTitle = meta?.name || episode.title;
+  const displayOverview = meta?.overview || episode.overview || "";
+  const stillUrl = meta?.stillUrl || (episode as any).stillUrl || null;
+
+  const rawPercent =
+    typeof episode.progressPercent === "number"
+      ? episode.progressPercent
+      : 0;
+  const clampedPercent = Math.max(0, Math.min(rawPercent, 100));
+
+  const hasResume =
+    typeof episode.resumeSeconds === "number" && episode.resumeSeconds > 0;
+
+  const showProgressBar =
+    typeof episode.progressPercent === "number" &&
+    clampedPercent > 0 &&
+    clampedPercent < 100;
+
   return (
     <div className="flex flex-col h-full">
       <Card className="flex-grow flex flex-col overflow-hidden">
-        <div className="relative aspect-video w-full bg-muted">
-          {episode.stillUrl ? (
-             <Image
-              src={episode.stillUrl}
-              alt={`Still from ${episode.title}`}
+        <button
+          type="button"
+          onClick={onClick}
+          className="relative aspect-video w-full bg-muted text-left"
+        >
+          {stillUrl ? (
+            <Image
+              src={stillUrl}
+              alt={`Still from ${displayTitle}`}
               fill
               className="object-cover"
+              // Avoid Next.js "fill without sizes" warning
+              sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
             />
           ) : (
-             <div className="w-full h-full bg-muted" />
+            <div className="w-full h-full bg-muted" />
           )}
-          <Button size="icon" variant="ghost" className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 h-12 w-12 rounded-full bg-black/50 text-white backdrop-blur-sm hover:bg-black/70">
-            <Play className="h-6 w-6 fill-current" />
-          </Button>
-        </div>
-        <CardContent className="p-4 flex-grow">
+
+          {/* Overlay play/resume pill */}
+          <span className="absolute inset-0 flex items-center justify-center">
+            <span className="inline-flex items-center gap-2 rounded-full bg-black/70 px-4 py-2 text-sm font-medium text-white backdrop-blur-sm transition hover:bg-black/80">
+              <Play className="h-4 w-4 fill-current" />
+              <span>{hasResume ? "Resume" : "Play"}</span>
+            </span>
+          </span>
+        </button>
+
+        <CardContent className="p-4 flex-grow flex flex-col">
           <p className="text-sm font-semibold text-primary">
             Episode {episode.episode}
           </p>
           <h3 className="font-bold text-lg leading-tight truncate">
-            {episode.title}
+            {displayTitle}
           </h3>
-          <p className="text-sm text-muted-foreground mt-2 line-clamp-2">
-            {episode.overview}
-          </p>
+
+          {/* Progress bar */}
+          {showProgressBar && (
+            <div className="mt-2 h-1.5 w-full rounded-full bg-background/40 overflow-hidden">
+              <div
+                className="h-full bg-primary"
+                style={{ width: `${clampedPercent}%` }}
+              />
+            </div>
+          )}
+
+          {displayOverview && (
+            <p className="text-sm text-muted-foreground mt-2 line-clamp-2">
+              {displayOverview}
+            </p>
+          )}
         </CardContent>
       </Card>
     </div>
   );
 }
 
-export function EpisodeSelector({ episodes }: EpisodeSelectorProps) {
+// --- Main selector -----------------------------------------------------------
+
+export function EpisodeSelector({
+  episodes,
+  tmdbShowId,
+  onPlay,
+}: EpisodeSelectorProps) {
+  // Debug helper: make sure resume data is actually coming in
+  if (process.env.NODE_ENV !== "production" && episodes.length) {
+    // eslint-disable-next-line no-console
+    console.log("[EpisodeSelector] sample episode", episodes[0]);
+  }
+
+  // ---- Season selection ----
   const seasons = useMemo(() => {
-    if (!episodes) return [];
+    if (!episodes?.length) return [];
     const seasonSet = new Set<number>();
-    episodes.forEach(ep => {
-      if (typeof ep.season === 'number') {
+    episodes.forEach((ep) => {
+      if (typeof ep.season === "number") {
         seasonSet.add(ep.season);
       }
     });
@@ -67,8 +172,69 @@ export function EpisodeSelector({ episodes }: EpisodeSelectorProps) {
 
   const filteredEpisodes = useMemo(() => {
     if (selectedSeason === null) return [];
-    return episodes.filter(ep => ep.season === selectedSeason);
+    return episodes.filter((ep) => ep.season === selectedSeason);
   }, [episodes, selectedSeason]);
+
+  // ---- TMDB episode metadata state ----
+  const { user } = useAuthUser();
+
+  const [episodeMeta, setEpisodeMeta] = useState<
+    Record<string, EpisodeMeta>
+  >({});
+
+  useEffect(() => {
+    if (!user || !tmdbShowId || !filteredEpisodes.length) return;
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const idToken = await user.getIdToken();
+
+        const requestEpisodes = filteredEpisodes
+          .map((ep) => ({
+            season: typeof ep.season === "number" ? ep.season : undefined,
+            episode: typeof ep.episode === "number" ? ep.episode : undefined,
+          }))
+          .filter(
+            (e) =>
+              typeof e.season === "number" && typeof e.episode === "number"
+          ) as { season: number; episode: number }[];
+
+        if (!requestEpisodes.length) return;
+
+        const data = await callFunction<Record<string, EpisodeMeta>>(
+          "tmdbEpisodeDetailsBatch",
+          {
+            tmdbShowId,
+            episodes: requestEpisodes,
+          },
+          idToken
+        );
+
+        if (cancelled || !data) return;
+
+        setEpisodeMeta((prev) => ({
+          ...prev,
+          ...data,
+        }));
+
+        if (process.env.NODE_ENV !== "production") {
+          // eslint-disable-next-line no-console
+          console.log(
+            "[EpisodeSelector] received TMDB meta keys",
+            Object.keys(data)
+          );
+        }
+      } catch (err) {
+        console.warn("[EpisodeSelector] tmdbEpisodeDetailsBatch failed:", err);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user, tmdbShowId, filteredEpisodes]);
 
   if (seasons.length === 0) {
     return null;
@@ -77,17 +243,19 @@ export function EpisodeSelector({ episodes }: EpisodeSelectorProps) {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h2 className="font-headline text-3xl font-bold tracking-tight">Episodes</h2>
+        <h2 className="font-headline text-3xl font-bold tracking-tight">
+          Episodes
+        </h2>
         {seasons.length > 1 && (
           <Select
-            value={String(selectedSeason)}
+            value={selectedSeason !== null ? String(selectedSeason) : undefined}
             onValueChange={(value) => setSelectedSeason(Number(value))}
           >
             <SelectTrigger className="w-[180px]">
               <SelectValue placeholder="Select a season" />
             </SelectTrigger>
             <SelectContent>
-              {seasons.map(seasonNum => (
+              {seasons.map((seasonNum) => (
                 <SelectItem key={seasonNum} value={String(seasonNum)}>
                   Season {seasonNum}
                 </SelectItem>
@@ -99,19 +267,42 @@ export function EpisodeSelector({ episodes }: EpisodeSelectorProps) {
 
       <Carousel
         opts={{
-          align: 'start',
+          align: "start",
           dragFree: true,
         }}
         className="w-full"
       >
         <CarouselContent className="-ml-4">
-          {filteredEpisodes.map((ep) => (
-            <CarouselItem key={ep.mediaId} className="pl-4 basis-full sm:basis-1/2 md:basis-1/3 lg:basis-1/4">
-              <EpisodeCard episode={ep} />
-            </CarouselItem>
-          ))}
+          {filteredEpisodes.map((ep) => {
+            const key = episodeKey(
+              typeof ep.season === "number" ? ep.season : undefined,
+              typeof ep.episode === "number" ? ep.episode : undefined
+            );
+            const meta = key ? episodeMeta[key] : undefined;
+
+            return (
+              <CarouselItem
+                key={ep.mediaId ?? `${ep.season}-${ep.episode}`}
+                className="pl-4 basis-full sm:basis-1/2 md:basis-1/3 lg:basis-1/4"
+              >
+                <EpisodeCard
+                  episode={ep}
+                  meta={meta}
+                  onClick={
+                    onPlay
+                      ? () => {
+                          onPlay(ep);
+                        }
+                      : undefined
+                  }
+                />
+              </CarouselItem>
+            );
+          })}
         </CarouselContent>
       </Carousel>
     </div>
   );
 }
+
+export default EpisodeSelector;
