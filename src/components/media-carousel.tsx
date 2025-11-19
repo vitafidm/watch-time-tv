@@ -22,6 +22,18 @@ import { usePlaybackProgress } from "@/hooks/usePlaybackProgress";
 type CardSize = "sm" | "lg";
 type Layout = "vertical" | "horizontal" | "featured";
 
+// --- Trailer helpers (same logic as HomepageHero) -------------------------
+
+type VideoPhase = "preload" | "playing" | "finished";
+
+function getYouTubeId(url?: string | null): string | null {
+  if (!url) return null;
+  const regExp =
+    /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
+  const match = url.match(regExp);
+  return match && match[2].length === 11 ? match[2] : null;
+}
+
 interface MediaCarouselProps {
   title: string;
   items: MediaItem[];
@@ -184,7 +196,7 @@ function HorizontalCard(props: {
   );
 }
 
-/** Featured card: hero-like (no Restart), Resume for movies & TV */
+/** Featured card: hero-like (no Restart), Resume for movies & TV + trailer support */
 function FeaturedCard(props: {
   item: MediaItem;
   href?: string | null;
@@ -199,6 +211,28 @@ function FeaturedCard(props: {
   const genres: string[] = Array.isArray((item as any).genres)
     ? ((item as any).genres as string[])
     : [];
+
+  // --- Trailer wiring (from HomepageHero) ---------------------------------
+  const videoLink = (item as any).videoLink as string | undefined;
+  const videoId = React.useMemo(() => getYouTubeId(videoLink), [videoLink]);
+
+  const [phase, setPhase] = React.useState<VideoPhase>(
+    videoId ? "preload" : "finished"
+  );
+
+  React.useEffect(() => {
+    if (!videoId) return;
+
+    if (phase === "preload") {
+      const playTimer = setTimeout(() => setPhase("playing"), 6000);
+      return () => clearTimeout(playTimer);
+    }
+
+    if (phase === "playing") {
+      const finishTimer = setTimeout(() => setPhase("finished"), 20000);
+      return () => clearTimeout(finishTimer);
+    }
+  }, [phase, videoId]);
 
   const pct = Math.max(0, Math.min(100, Math.floor(progressPercent ?? 0)));
 
@@ -244,17 +278,36 @@ function FeaturedCard(props: {
   const Content = (
     <div className="group relative w-full">
       <div className="relative aspect-video w-full overflow-hidden rounded-xl">
-        {bg ? (
-          <Image
-            src={bg}
-            alt={item.title}
-            fill
-            className="object-cover"
-            sizes="(max-width: 768px) 90vw, (max-width: 1280px) 80vw, 100vw"
-          />
-        ) : (
-          <div className="absolute inset-0 bg-muted" />
-        )}
+        {/* Background media: trailer video + fallback image (hero-style) */}
+        <div className="absolute inset-0 bg-black">
+          {videoId && (
+            <iframe
+              src={`https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&mute=1&controls=0&loop=1&playlist=${videoId}&playsinline=1&iv_load_policy=3&modestbranding=1`}
+              frameBorder="0"
+              allow="autoplay; encrypted-media"
+              allowFullScreen
+              className={cn(
+                "absolute inset-0 w-full h-full object-cover transition-opacity duration-1000",
+                phase === "playing" ? "opacity-100" : "opacity-0 pointer-events-none"
+              )}
+            />
+          )}
+
+          {bg ? (
+            <Image
+              src={bg}
+              alt={item.title}
+              fill
+              className={cn(
+                "object-cover transition-opacity duration-1000",
+                phase === "playing" ? "opacity-0" : "opacity-100"
+              )}
+              sizes="(max-width: 768px) 90vw, (max-width: 1280px) 80vw, 100vw"
+            />
+          ) : (
+            <div className="absolute inset-0 bg-muted" />
+          )}
+        </div>
 
         {/* Hero-style gradients */}
         <div className="absolute inset-0 bg-gradient-to-t from-background/80 via-background/50 to-transparent" />
