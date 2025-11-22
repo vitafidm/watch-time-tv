@@ -1,4 +1,4 @@
-"use client"
+"use client";
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -17,24 +17,23 @@ const menuItems = [
     href: "/collections",
     label: "Collections",
   },
-  {
-    href: "/watchlist",
-    label: "Watchlist",
-  },
 ];
 
 export function MainNav() {
   const pathname = usePathname();
 
   return (
-    <nav className="hidden md:flex items-center space-x-6 text-sm font-medium">
+    // Note: visibility is now controlled by the parent wrapper in AppHeader (`hidden lg:flex`)
+    <nav className="flex items-center space-x-6 text-sm font-medium">
       {menuItems.map((item) => (
-        <Link 
+        <Link
           key={item.href}
           href={item.href}
           className={cn(
             "transition-colors hover:text-primary",
-            pathname === item.href ? "text-primary font-semibold" : "text-muted-foreground"
+            pathname === item.href
+              ? "text-primary font-semibold"
+              : "text-muted-foreground"
           )}
         >
           {item.label}

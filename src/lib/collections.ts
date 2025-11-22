@@ -22,7 +22,7 @@ import {
 import { db } from "@/lib/firebase.client";
 
 /* =============================================================================
- * Reorders Collection Priority
+ * Reorders Collection Priority (rows on homepage)
  * ========================================================================== */
 
 /** Returns saved priority order (array of collection IDs) or [] if none. */
@@ -36,10 +36,48 @@ export async function getCollectionOrder(uid: string): Promise<string[]> {
   return order;
 }
 
-/** Persists the order of collection IDs. */
+/** Persists the order of collection IDs (row order on homepage). */
 export async function saveCollectionPriority(uid: string, ids: string[]): Promise<void> {
   const ref = doc(db, `users/${uid}/meta`, "collectionOrder");
   await setDoc(ref, { order: ids }, { merge: true });
+}
+
+/* =============================================================================
+ * Save Collection Order (items within a single collection)
+ * ========================================================================== */
+
+/**
+ * Re-order the *items* inside a given collection:
+ * users/{uid}/collections/{cid}/items/{itemId}
+ */
+export async function saveCollectionOrder(
+  uid: string,
+  cid: string,
+  orderedItemIds: string[]
+) {
+  // user/{uid}
+  const userDoc = doc(db, "users", uid);
+
+  // user/{uid}/collections/{cid}
+  const collDoc = doc(userDoc, "collections", cid);
+
+  // user/{uid}/collections/{cid}/items
+  const itemsCol = collection(collDoc, "items");
+
+  const batch = writeBatch(db);
+  let orderVal = 0;
+
+  for (const itemId of orderedItemIds) {
+    orderVal += 10;
+    batch.update(doc(itemsCol, itemId), {
+      order: orderVal,
+      updatedAt: serverTimestamp(),
+    });
+  }
+
+  // bump parent updatedAt so rows re-sort/react
+  batch.update(collDoc, { updatedAt: serverTimestamp() });
+  await batch.commit();
 }
 
 /* =============================================================================
@@ -68,47 +106,14 @@ export type UserCollectionItem = {
   year?: number | null;
   genres?: string[];
   videoLink?: string | null;
+  overview?: string | null;
   // NOTE: we also write an untyped `uid` field for safer/faster collectionGroup queries
 };
-
-/* =============================================================================
- * Save Collection Order
- * ========================================================================== */
-
-export async function saveCollectionOrder(
-  uid: string,
-  cid: string,
-  orderedItemIds: string[]
-) {
-  // user/{uid}
-  const userDoc = doc(db, "users", uid);
-
-  // user/{uid}/collections/{cid}
-  const collDoc = doc(userDoc, "collections", cid);
-
-  // user/{uid}/collections/{cid}/items
-  const itemsCol = collection(collDoc, "items");
-
-  const batch = writeBatch(db);
-  let orderVal = 0;
-  for (const itemId of orderedItemIds) {
-    orderVal += 10;
-    batch.update(doc(itemsCol, itemId), {
-      order: orderVal,
-      updatedAt: serverTimestamp(),
-    });
-  }
-
-  // bump parent updatedAt
-  batch.update(collDoc, { updatedAt: serverTimestamp() });
-  await batch.commit();
-}
 
 /* =============================================================================
  * Fetch Pinned Collections (+ items) for Homepage
  * ========================================================================== */
 
-// Fetch all pinned collections for a user and (optionally) a limited set of items per collection
 // Fetch all pinned collections for a user and (optionally) a limited set of items per collection
 export async function fetchPinnedCollectionsWithItems(uid: string, itemLimit = 20) {
   const qy = query(
@@ -131,7 +136,6 @@ export async function fetchPinnedCollectionsWithItems(uid: string, itemLimit = 2
       posterPath?: string | null;
       backdropPath?: string | null;
       year?: number | null;
-      // NEW: extra meta we enrich from the canonical media docs
       genres?: string[];
       videoLink?: string | null;
       overview?: string | null;
@@ -141,89 +145,63 @@ export async function fetchPinnedCollectionsWithItems(uid: string, itemLimit = 2
   for (const d of snap.docs) {
     const c = { id: d.id, ...(d.data() as any) };
 
-    const itemsQ = query(
-      itemsRef(uid, c.id),
-      orderBy("order", "asc"),
-      limit(itemLimit)
-    );
+    const itemsQ = query(itemsRef(uid, c.id), orderBy("order", "asc"), limit(itemLimit));
     const itemsSnap = await getDocs(itemsQ);
 
-    // Base fields from the collection item doc
-    const baseItems = itemsSnap.docs.map((x) => {
-      const data = x.data() as any;
-      return {
-        id: x.id, // collection item doc id
-        mediaId: data.mediaId,
-        mediaType: data.mediaType as "movie" | "show",
-        title: data.title,
-        posterPath: data.posterPath ?? null,
-        backdropPath: data.backdropPath ?? null,
-        year: typeof data.year === "number" ? data.year : null,
-        genres: data.genres ?? null,
-        videoLink: data.videoLink ?? null,
-      };
-    });
+    const items = await Promise.all(
+      itemsSnap.docs.map(async (x) => {
+        const data = x.data() as any;
 
-    // Enrich each item with genres / videoLink / overview
-    const enrichedItems = await Promise.all(
-      baseItems.map(async (it) => {
-        let genres: string[] | undefined;
-        let videoLink: string | null | undefined;
-        let overview: string | undefined;
+        // Prefer stored fields on the collection item
+        let genres: string[] = Array.isArray(data.genres)
+          ? data.genres.map((g: any) => String(g))
+          : [];
+        let videoLink: string | null =
+          typeof data.videoLink === "string" && data.videoLink.trim()
+            ? data.videoLink.trim()
+            : null;
+        let overview: string | null =
+          typeof data.overview === "string" && data.overview.trim()
+            ? data.overview.trim()
+            : null;
 
-        try {
-          if (it.mediaType === "show") {
-            // assumes the show doc id is the same as mediaId
-            const showSnap = await getDoc(
-              doc(db, `users/${uid}/shows`, String(it.mediaId))
-            );
-            if (showSnap.exists()) {
-              const show = showSnap.data() as any;
-              genres = Array.isArray(show.genres)
-                ? show.genres
-                : Array.isArray(show.genreNames)
-                ? show.genreNames
-                : undefined;
-              videoLink = show.videoLink ?? null;
-              overview =
-                show.overview ??
-                show.description ??
-                undefined;
-            }
-          } else if (it.mediaType === "movie") {
-            // assumes the movie doc id is the same as mediaId
-            const movieSnap = await getDoc(
-              doc(db, `users/${uid}/media`, String(it.mediaId))
-            );
-            if (movieSnap.exists()) {
-              const movie = movieSnap.data() as any;
-              genres = Array.isArray(movie.genres)
-                ? movie.genres
-                : Array.isArray(movie.genreNames)
-                ? movie.genreNames
-                : undefined;
-              videoLink = movie.videoLink ?? null;
-              overview =
-                movie.overview ??
-                movie.plot ??
-                undefined;
-            }
+        // Backward-compat: if any of these are missing, enrich from canonical media doc
+        if ((!genres.length || !videoLink || !overview) && data.mediaId && data.mediaType) {
+          try {
+            const enriched = await enrichBareItemWithMeta(uid, {
+              mediaId: String(data.mediaId),
+              mediaType: data.mediaType as "movie" | "show",
+              title: data.title,
+              posterPath: data.posterPath,
+              backdropPath: data.backdropPath,
+              year: data.year,
+            });
+
+            if (!genres.length && enriched.genres?.length) genres = enriched.genres;
+            if (!videoLink && enriched.videoLink) videoLink = enriched.videoLink;
+            if (!overview && enriched.overview) overview = enriched.overview;
+          } catch (err) {
+            console.error("[collections] failed to enrich pinned item meta", {
+              uid,
+              collectionId: c.id,
+              mediaId: data.mediaId,
+              mediaType: data.mediaType,
+              err,
+            });
           }
-        } catch (err) {
-          console.error("[collections] failed to enrich collection item meta", {
-            uid,
-            collectionId: c.id,
-            mediaId: it.mediaId,
-            mediaType: it.mediaType,
-            err,
-          });
         }
 
         return {
-          ...it,
-          ...(genres ? { genres } : {}),
-          ...(videoLink !== undefined ? { videoLink } : {}),
-          ...(overview ? { overview } : {}),
+          id: x.id, // collection item doc id
+          mediaId: data.mediaId,
+          mediaType: data.mediaType as "movie" | "show",
+          title: data.title,
+          posterPath: data.posterPath ?? null,
+          backdropPath: data.backdropPath ?? null,
+          year: typeof data.year === "number" ? data.year : null,
+          genres,
+          videoLink,
+          overview,
         };
       })
     );
@@ -233,13 +211,12 @@ export async function fetchPinnedCollectionsWithItems(uid: string, itemLimit = 2
       title: c.title,
       style: c.style,
       pinnedToHome: c.pinnedToHome,
-      items: enrichedItems,
+      items,
     });
   }
 
   return results;
 }
-
 
 /* =============================================================================
  * Small utils
@@ -267,6 +244,114 @@ const collectionRef = (uid: string, cid: string) => doc(userCollectionsRef(uid),
 const itemsRef = (uid: string, cid: string) => collection(collectionRef(uid, cid), "items");
 
 /* =============================================================================
+ * Media meta enrichment helpers
+ * ========================================================================== */
+
+function extractMetaFromMediaDoc(data: any): {
+  genres: string[];
+  videoLink: string | null;
+  overview: string | null;
+} {
+  // genres: prefer `genres`, then `genreNames`
+  let genres: string[] = [];
+  if (Array.isArray(data?.genres)) {
+    genres = data.genres.map((g: any) => String(g));
+  } else if (Array.isArray(data?.genreNames)) {
+    genres = data.genreNames.map((g: any) => String(g));
+  }
+
+  // videoLink: already a URL in your docs
+  const videoLink =
+    typeof data?.videoLink === "string" && data.videoLink.trim().length > 0
+      ? data.videoLink.trim()
+      : null;
+
+  // overview: prefer overview, then description/plot
+  let overview: string | null = null;
+  if (typeof data?.overview === "string" && data.overview.trim()) {
+    overview = data.overview.trim();
+  } else if (typeof data?.description === "string" && data.description.trim()) {
+    overview = data.description.trim();
+  } else if (typeof data?.plot === "string" && data.plot.trim()) {
+    overview = data.plot.trim();
+  }
+
+  return { genres, videoLink, overview };
+}
+
+async function enrichBareItemWithMeta(
+  uid: string,
+  it: {
+    mediaId: string;
+    mediaType: "movie" | "show";
+    title: string;
+    posterPath?: string | null;
+    backdropPath?: string | null;
+    year?: number | null;
+  }
+): Promise<
+  Pick<
+    UserCollectionItem,
+    | "mediaId"
+    | "mediaType"
+    | "title"
+    | "posterPath"
+    | "backdropPath"
+    | "year"
+    | "genres"
+    | "videoLink"
+    | "overview"
+  >
+> {
+  let genres: string[] = [];
+  let videoLink: string | null = null;
+  let overview: string | null = null;
+
+  try {
+    // Primary path based on mediaType
+    const primaryPath =
+      it.mediaType === "show"
+        ? `users/${uid}/shows/${it.mediaId}`
+        : `users/${uid}/media/${it.mediaId}`;
+
+    let snap = await getDoc(doc(db, primaryPath));
+
+    // Fallback: some TV records may only live in /media (episodes)
+    if (!snap.exists() && it.mediaType === "show") {
+      const fallbackPath = `users/${uid}/media/${it.mediaId}`;
+      snap = await getDoc(doc(db, fallbackPath));
+    }
+
+    if (snap.exists()) {
+      const data = snap.data() as any;
+      const extracted = extractMetaFromMediaDoc(data);
+      genres = extracted.genres;
+      videoLink = extracted.videoLink;
+      overview = extracted.overview;
+    }
+  } catch (err) {
+    console.error("[collections] enrichBareItemWithMeta failed", {
+      uid,
+      mediaId: it.mediaId,
+      mediaType: it.mediaType,
+      err,
+    });
+  }
+
+  return {
+    mediaId: String(it.mediaId),
+    mediaType: it.mediaType,
+    title: it.title,
+    posterPath: it.posterPath ?? null,
+    backdropPath: it.backdropPath ?? null,
+    year: typeof it.year === "number" ? it.year : null,
+    genres,
+    videoLink,
+    overview,
+  };
+}
+
+/* =============================================================================
  * Create
  * ========================================================================== */
 
@@ -288,38 +373,27 @@ export async function createCollectionWithItems(
   } as UserCollection);
 
   const batch = writeBatch(db);
-  const enrichedItems: UserCollectionItem[] = [];
 
-  // Enrich items with genres and videoLink
-  for (const it of items) {
-    let genres: string[] = [];
-    let videoLink: string | null = null;
-    try {
-      const sourcePath = it.mediaType === 'show' ? `users/${uid}/shows/${it.mediaId}` : `users/${uid}/media/${it.mediaId}`;
-      const sourceSnap = await getDoc(doc(db, sourcePath));
-      if (sourceSnap.exists()) {
-        const data = sourceSnap.data() as any;
-        genres = Array.isArray(data.genres) ? data.genres :
-                 Array.isArray(data.genreNames) ? data.genreNames : [];
-        videoLink = data.videoLink ?? null;
-      }
-    } catch { /* ignore enrichment errors */ }
-    
-    enrichedItems.push({
-      ...it,
-      genres,
-      videoLink,
-      order: 0, // placeholder, will be set next
-      addedAt: now,
-    });
-  }
+  // Enrich from canonical movie/show docs
+  const enriched = await Promise.all(
+    items.map((it) =>
+      enrichBareItemWithMeta(uid, {
+        mediaId: String(it.mediaId),
+        mediaType: it.mediaType,
+        title: it.title,
+        posterPath: it.posterPath,
+        backdropPath: it.backdropPath,
+        year: it.year,
+      })
+    )
+  );
 
   let orderVal = 0;
-  for (const it of enrichedItems) {
+  for (const it of enriched) {
     const ref = doc(itemsRef(uid, colDoc.id));
     const payload = clean({
       ...it,
-      uid, // NEW: stamp uid for safer/faster collectionGroup queries
+      uid, // stamp uid for collectionGroup queries
       order: (orderVal += 10),
       addedAt: now,
       posterPath: it.posterPath ?? null,
@@ -327,22 +401,22 @@ export async function createCollectionWithItems(
       year: it.year ?? null,
       genres: it.genres ?? [],
       videoLink: it.videoLink ?? null,
+      overview: it.overview ?? null,
     } as UserCollectionItem);
     batch.set(ref, payload);
   }
 
   batch.update(colDoc, {
-    itemCount: enrichedItems.length,
+    itemCount: enriched.length,
     updatedAt: now,
-    ...(enrichedItems[0]?.posterPath
-      ? { coverImage: { url: enrichedItems[0]!.posterPath, aspect: "2:3" as const } }
+    ...(enriched[0]?.posterPath
+      ? { coverImage: { url: enriched[0]!.posterPath, aspect: "2:3" as const } }
       : {}),
   });
 
   await batch.commit();
   return colDoc.id;
 }
-
 
 /* =============================================================================
  * Read collections + items
@@ -435,7 +509,9 @@ export async function upsertCollectionItems(
   // Upserts / updates
   for (const [k, want] of desiredMap) {
     const existing = currentMap.get(k);
+
     if (existing) {
+      // Existing item: keep existing genres/videoLink/overview; update basic fields + order
       batch.update(
         doc(itemsRef(uid, cid), existing.id),
         clean({
@@ -448,21 +524,32 @@ export async function upsertCollectionItems(
         })
       );
     } else {
+      // NEW item → enrich from canonical movie/show doc
+      const enriched = await enrichBareItemWithMeta(uid, {
+        mediaId: String(want.mediaId),
+        mediaType: want.mediaType,
+        title: want.title,
+        posterPath: want.posterPath,
+        backdropPath: want.backdropPath,
+        year: want.year,
+      });
+
       const newRef = doc(itemsRef(uid, cid));
       batch.set(
         newRef,
         clean({
-          uid, // NEW: stamp uid
-          mediaId: want.mediaId,
-          mediaType: want.mediaType,
-          title: want.title,
-          posterPath: want.posterPath ?? null,
-          backdropPath: want.backdropPath ?? null,
-          year: want.year ?? null,
+          uid, // stamp uid
+          ...enriched,
           order: want.order,
           addedAt: now,
           updatedAt: now,
-        })
+          posterPath: enriched.posterPath ?? null,
+          backdropPath: enriched.backdropPath ?? null,
+          year: enriched.year ?? null,
+          genres: enriched.genres ?? [],
+          videoLink: enriched.videoLink ?? null,
+          overview: enriched.overview ?? null,
+        } as UserCollectionItem)
       );
     }
   }
@@ -592,7 +679,7 @@ async function resolveCanonicalIdForCollections(
   await batch.commit();
   console.debug(`[propagate] updated ${count} collection item(s) for`, { kind, mediaId });
   return { updated: count };
-}
+} */
 
 /* =============================================================================
  * (Optional) library paging helpers for the modal, if you want them here
@@ -606,7 +693,13 @@ export async function pageUserMovies(
 ) {
   const base = collection(db, "users", uid, "media");
   const qy = cursor
-    ? query(base, where("tmdbType", "==", "movie"), orderBy("__name__"), startAfter(cursor), limit(pageSize))
+    ? query(
+        base,
+        where("tmdbType", "==", "movie"),
+        orderBy("__name__"),
+        startAfter(cursor),
+        limit(pageSize)
+      )
     : query(base, where("tmdbType", "==", "movie"), orderBy("__name__"), limit(pageSize));
 
   const snap = await getDocs(qy);
@@ -625,7 +718,13 @@ export async function pageUserShows(
 ) {
   const base = collection(db, "users", uid, "shows");
   const qy = cursor
-    ? query(base, where("tmdbType", "==", "tv"), orderBy("__name__"), startAfter(cursor), limit(pageSize))
+    ? query(
+        base,
+        where("tmdbType", "==", "tv"),
+        orderBy("__name__"),
+        startAfter(cursor),
+        limit(pageSize)
+      )
     : query(base, where("tmdbType", "==", "tv"), orderBy("__name__"), limit(pageSize));
 
   const snap = await getDocs(qy);

@@ -1,13 +1,11 @@
 // src/app/page.tsx
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import type { MediaItem } from "@/lib/types";
-import { useSearch } from "@/hooks/use-search";
 import { useAuthUser } from "@/hooks/useAuthUser";
 import { MediaCarousel } from "@/components/media-carousel";
 import { NewCollectionModal } from "@/components/NewCollectionModal";
-import { HomepageHero, type HeroData } from "@/components/HomepageHero";
 import {
   fetchPinnedCollectionsWithItems,
   getCollection,
@@ -19,31 +17,32 @@ import {
   type MediaEditModalItem,
 } from "@/components/MediaEditModal";
 import { PlayerDialog } from "@/components/PlayerDialog";
-
-import {
-  collection,
-  doc,
-  getDocs,
-  getDoc,
-  limit,
-  orderBy,
-  query,
-  where,
-} from "firebase/firestore";
+import { doc, getDoc } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { resolveShowPlayTargetByRef } from "@/lib/resolveShowPlay";
 import { useContinueWatching } from "@/hooks/useContinueWatching";
+import { markPlaybackFinished } from "@/lib/playbackReport";
 
 
 type PinnedRow = {
   id: string;
   title: string;
-  // styles: 'vertical-posters-small' | 'vertical-posters-large' | 'horizontal-posters-large'
-  style?: string;
+  style?: string; // e.g. "vertical-posters-small" | "horizontal-posters-large" | "horizontal-poster-featured"
   items: MediaItem[];
 };
+
+type PinnedCache = {
+  uid: string;
+  rows: PinnedRow[];
+  ts: number;
+};
+
+let pinnedCache: PinnedCache | null = null;
+const PINNED_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes; tweak as you like
+
+const FALLBACK_RELEASE_DATE = "2000-01-01";
 
 function normalizeGenres(raw: any): string[] {
   if (!raw) return [];
@@ -59,23 +58,12 @@ function normalizeGenres(raw: any): string[] {
   return [];
 }
 
-const FALLBACK_RELEASE_DATE = "2000-01-01";
-
-type HeroPick = HeroData & {
-  kind: "movie" | "tv";
-  movieMediaId?: string | null; // movies: streamable id
-  showRefPath?: string | null; // shows: Firestore path to show doc
-};
-
 export default function BrowsePage() {
-  const { searchTerm } = useSearch();
   const { user } = useAuthUser();
   const uid = user?.uid ?? "";
 
   const [pinned, setPinned] = useState<PinnedRow[]>([]);
   const [pinnedLoading, setPinnedLoading] = useState<boolean>(true);
-  const [hero, setHero] = useState<HeroPick | null>(null);
-  const [heroLoading, setHeroLoading] = useState<boolean>(true);
 
   // Media edit + player state
   const [editingItem, setEditingItem] = useState<MediaEditModalItem | null>(null);
@@ -83,141 +71,205 @@ export default function BrowsePage() {
   const [selectedMediaId, setSelectedMediaId] = useState<string | number | null>(null);
   const [selectedTitle, setSelectedTitle] = useState<string | undefined>(undefined);
   const [selectedStartTime, setSelectedStartTime] = useState<number | null>(null);
-  const { items: continueItems, loading: continueLoading } = useContinueWatching({ uid, max: 20 });
 
+  const { items: continueItems, loading: continueLoading } = useContinueWatching({
+    uid,
+    max: 20,
+  });
 
-  // Map pinned collections -> MediaItem[], allowing either poster OR backdrop
-  async function loadPinned() {
-    if (!uid) {
-      setPinned([]);
-      setPinnedLoading(false);
-      return;
-    }
-
-    setPinnedLoading(true);
-    try {
-      // Fetch rows + saved priority in parallel
-      const [rows, order] = await Promise.all([
-        fetchPinnedCollectionsWithItems(uid, 24),
-        getCollectionOrder(uid).catch(() => [] as string[]),
-      ]);
-
-      // 1) Base map — keep poster/backdrop; title prefers showTitle/normalizedTitle
-      let mapped: PinnedRow[] = rows.map((r) => {
-        const items: MediaItem[] = r.items
-          .map((it: any) => {
-            const displayTitle =
-              it.mediaType === "show" ? it.showTitle ?? it.title : it.normalizedTitle ?? it.title;
-
-            const poster =
-              typeof it.posterPath === "string" && it.posterPath.trim()
-                ? it.posterPath
-                : undefined;
-
-            const backdrop =
-              (typeof it.backdropPath === "string" && it.backdropPath.trim() && it.backdropPath) ||
-              (typeof it.backdropUrl === "string" && it.backdropUrl.trim() && it.backdropUrl) ||
-              (typeof it.backdrop_path === "string" && it.backdrop_path.trim() && it.backdrop_path) ||
-              undefined;
-
-            const year =
-              typeof it.year === "number" && isFinite(it.year) && it.year > 1800
-                ? `${it.year}-01-01`
-                : FALLBACK_RELEASE_DATE;
-
-            // Allow either poster or backdrop so something renders; we'll hydrate what's missing
-            if (!poster && !backdrop) return null;
-
-            return {
-              id: it.mediaId,
-              title: displayTitle,
-              poster_path: poster,
-              backdrop_path: backdrop,
-              release_date: year,
-              media_type: it.mediaType === "show" ? "tv" : "movie",
-              overview: it.overview || "",
-              // NOTE: overview/genres will be hydrated below for horizontal/featured
-            } as MediaItem;
-          })
-          .filter(Boolean) as MediaItem[];
-
-        return {
-          id: r.id,
-          title: r.title,
-          style: r.style ?? "vertical-posters-small",
-          items,
-        };
-      });
-
-      // 2) Hydrate from canonical docs (movies => users/{uid}/media, shows => users/{uid}/shows)
-      {
-        const hydrateTasks: Promise<void>[] = [];
-
-        mapped.forEach((row, rowIdx) => {
-          row.items.forEach((item, itemIdx) => {
-            hydrateTasks.push(
-              (async () => {
-                try {
-                  const isTv = item.media_type === "tv";
-                  const basePath = isTv ? `users/${uid}/shows` : `users/${uid}/media`;
-                  const ref = doc(db, basePath, String(item.id));
-                  const snap = await getDoc(ref);
-                  if (!snap.exists()) return;
-
-                  const d: any = snap.data();
-
-                  const title = isTv
-                    ? (typeof d.showTitle === "string" && d.showTitle.trim())
-                      ? d.showTitle
-                      : (d.title ?? item.title)
-                    : (typeof d.normalizedTitle === "string" && d.normalizedTitle.trim())
-                      ? d.normalizedTitle
-                      : (d.title ?? item.title);
-
-                  const poster = (typeof d.posterUrl === "string" && d.posterUrl.trim())
-                    ? d.posterUrl
-                    : item.poster_path;
-
-                  const backdrop = (typeof d.backdropUrl === "string" && d.backdropUrl.trim())
-                    ? d.backdropUrl
-                    : item.backdrop_path;
-
-                  mapped[rowIdx].items[itemIdx] = {
-                    ...item,
-                    title,
-                    poster_path: poster,
-                    backdrop_path: backdrop,
-                    overview: d?.overview || d?.description || "",
-                  } as any;
-                } catch {
-                  // Ignore failures; leave item as-is
-                }
-              })()
-            );
-          });
-        });
-
-        if (hydrateTasks.length) {
-          await Promise.all(hydrateTasks);
-        }
+    // Map pinned collections -> MediaItem[], allowing either poster OR backdrop
+    async function loadPinned(forceNetwork = false) {
+      if (!uid) {
+        setPinned([]);
+        setPinnedLoading(false);
+        return;
       }
-
-      // 3) Apply saved priority order to rows
-      const rank = new Map<string, number>();
-      order.forEach((id, i) => rank.set(id, i));
-      mapped.sort((a, b) => {
-        const ra = rank.has(a.id) ? (rank.get(a.id) as number) : Number.POSITIVE_INFINITY;
-        const rb = rank.has(b.id) ? (rank.get(b.id) as number) : Number.POSITIVE_INFINITY;
-        return ra - rb;
-      });
-
-      setPinned(mapped);
-    } catch {
-      setPinned([]);
-    } finally {
-      setPinnedLoading(false);
+  
+      const now = Date.now();
+  
+      // If we have a fresh cache and we're not forcing network, use it
+      if (
+        !forceNetwork &&
+        pinnedCache &&
+        pinnedCache.uid === uid &&
+        now - pinnedCache.ts < PINNED_CACHE_TTL_MS
+      ) {
+        setPinned(pinnedCache.rows);
+        setPinnedLoading(false);
+        return;
+      }
+  
+      setPinnedLoading(true);
+      try {
+        // Fetch rows + saved priority in parallel
+        const [rows, order] = await Promise.all([
+          fetchPinnedCollectionsWithItems(uid, 24),
+          getCollectionOrder(uid).catch(() => [] as string[]),
+        ]);
+  
+        // 1) Base map — keep poster/backdrop; also carry through genres + videoLink
+        let mapped: PinnedRow[] = rows.map((r) => {
+          const items: MediaItem[] = r.items
+            .map((it: any) => {
+              const displayTitle =
+                it.mediaType === "show"
+                  ? it.showTitle ?? it.title
+                  : it.normalizedTitle ?? it.title;
+  
+              const poster =
+                typeof it.posterPath === "string" && it.posterPath.trim()
+                  ? it.posterPath
+                  : undefined;
+  
+              const backdrop =
+                (typeof it.backdropPath === "string" &&
+                  it.backdropPath.trim() &&
+                  it.backdropPath) ||
+                (typeof it.backdropUrl === "string" &&
+                  it.backdropUrl.trim() &&
+                  it.backdropUrl) ||
+                (typeof it.backdrop_path === "string" &&
+                  it.backdrop_path.trim() &&
+                  it.backdrop_path) ||
+                undefined;
+  
+              const year =
+                typeof it.year === "number" && isFinite(it.year) && it.year > 1800
+                  ? `${it.year}-01-01`
+                  : FALLBACK_RELEASE_DATE;
+  
+              const genres = normalizeGenres(
+                it.genres ?? it.genreNames ?? it.tmdbGenres ?? it.genresList
+              );
+  
+              const videoLink =
+                typeof it.videoLink === "string" && it.videoLink.trim().length > 0
+                  ? it.videoLink
+                  : undefined;
+  
+              if (!poster && !backdrop) return null;
+  
+              return {
+                id: it.mediaId,
+                title: displayTitle,
+                poster_path: poster,
+                backdrop_path: backdrop,
+                release_date: year,
+                media_type: it.mediaType === "show" ? "tv" : "movie",
+                overview: it.overview || "",
+                ...(genres.length ? { genres } : {}),
+                ...(videoLink ? { videoLink } : {}),
+              } as any;
+            })
+            .filter(Boolean) as MediaItem[];
+  
+          return {
+            id: r.id,
+            title: r.title,
+            style: r.style ?? "vertical-posters-small",
+            items,
+          };
+        });
+  
+        // 2) Hydrate from canonical docs
+        {
+          const hydrateTasks: Promise<void>[] = [];
+  
+          mapped.forEach((row, rowIdx) => {
+            row.items.forEach((item, itemIdx) => {
+              hydrateTasks.push(
+                (async () => {
+                  try {
+                    const isTv = item.media_type === "tv";
+                    const basePath = isTv ? `users/${uid}/shows` : `users/${uid}/media`;
+                    const ref = doc(db, basePath, String(item.id));
+                    const snap = await getDoc(ref);
+                    if (!snap.exists()) return;
+  
+                    const d: any = snap.data();
+  
+                    const title = isTv
+                      ? typeof d.showTitle === "string" && d.showTitle.trim()
+                        ? d.showTitle
+                        : d.title ?? item.title
+                      : typeof d.normalizedTitle === "string" && d.normalizedTitle.trim()
+                      ? d.normalizedTitle
+                      : d.title ?? item.title;
+  
+                    const poster =
+                      typeof d.posterUrl === "string" && d.posterUrl.trim()
+                        ? d.posterUrl
+                        : item.poster_path;
+  
+                    const backdrop =
+                      typeof d.backdropUrl === "string" && d.backdropUrl.trim()
+                        ? d.backdropUrl
+                        : item.backdrop_path;
+  
+                    const hydratedGenres =
+                      normalizeGenres(
+                        d.genres ??
+                          d.genreNames ??
+                          d.genre_names ??
+                          d.genresList
+                      ) || (item as any).genres || [];
+  
+                    const hydratedVideoLink =
+                      (typeof d.videoLink === "string" && d.videoLink.trim().length > 0
+                        ? d.videoLink
+                        : undefined) || (item as any).videoLink;
+  
+                    mapped[rowIdx].items[itemIdx] = {
+                      ...item,
+                      title,
+                      poster_path: poster,
+                      backdrop_path: backdrop,
+                      overview:
+                        d?.overview ||
+                        d?.description ||
+                        (item as any).overview ||
+                        "",
+                      ...(hydratedGenres.length ? { genres: hydratedGenres } : {}),
+                      ...(hydratedVideoLink ? { videoLink: hydratedVideoLink } : {}),
+                    } as any;
+                  } catch {
+                    // Ignore failures; leave item as-is
+                  }
+                })()
+              );
+            });
+          });
+  
+          if (hydrateTasks.length) {
+            await Promise.all(hydrateTasks);
+          }
+        }
+  
+        // 3) Apply saved priority order to rows
+        const rank = new Map<string, number>();
+        order.forEach((id, i) => rank.set(id, i));
+        mapped.sort((a, b) => {
+          const ra = rank.has(a.id)
+            ? (rank.get(a.id) as number)
+            : Number.POSITIVE_INFINITY;
+          const rb = rank.has(b.id)
+            ? (rank.get(b.id) as number)
+            : Number.POSITIVE_INFINITY;
+          return ra - rb;
+        });
+  
+        // Save to state + cache
+        setPinned(mapped);
+        pinnedCache = { uid, rows: mapped, ts: Date.now() };
+      } catch {
+        setPinned([]);
+        // if error, also clear cache for this uid so we don't reuse bad data
+        if (pinnedCache?.uid === uid) pinnedCache = null;
+      } finally {
+        setPinnedLoading(false);
+      }
     }
-  }
+  
 
   useEffect(() => {
     void loadPinned();
@@ -260,7 +312,7 @@ export default function BrowsePage() {
   }
 
   async function refreshPinned() {
-    await loadPinned();
+    await loadPinned(true);
   }
 
   useEffect(() => {
@@ -271,7 +323,7 @@ export default function BrowsePage() {
     return () => window.removeEventListener("media-artwork-updated", handler as EventListener);
   }, []);
 
-  // ✅ NICE UX: Optimistically patch the edited media across visible pinned rows
+  // Optimistically patch edited media across visible pinned rows
   const handleApplied = (id: string, patch: Partial<any>) => {
     const nextTitle =
       (patch as any).displayTitle ??
@@ -296,157 +348,22 @@ export default function BrowsePage() {
     );
   };
 
-  // HOMEPAGE HERO: fetch a small pool (movies + shows), pick one random, render once
-  useEffect(() => {
-    if (!uid) {
-      setHero(null);
-      setHeroLoading(false);
-      return;
-    }
+  const hasContinue =
+    !continueLoading && continueItems && continueItems.length > 0;
 
-    let cancelled = false;
-    setHeroLoading(true);
-
-    const mapMovie = (d: any, docId: string): HeroPick | null => {
-      if (d?.type !== "movie") return null;
-
-      const resolvedTitle =
-        typeof d?.normalizedTitle === "string" && d.normalizedTitle.trim()
-          ? d.normalizedTitle
-          : (d?.title ?? "");
-
-      const backdropUrl = d?.backdropUrl || null;
-      const posterUrl = d?.posterUrl || null;
-      if (!resolvedTitle || (!backdropUrl && !posterUrl)) return null;
-
-      return {
-        kind: "movie",
-        title: resolvedTitle,
-        overview: d?.overview || d?.description || "",
-        mediaType: "movie",
-        videoLink: d?.videoLink || null,
-        backdropUrl,
-        posterUrl,
-        tmdbId: d?.tmdbId ?? d?.tmdbMovieId ?? null,
-        releaseDate: d?.releaseDate || "",
-        voteAverage: d?.voteAverage ?? 0,
-        genres: Array.isArray(d?.genres) ? (d.genres as string[]) : [],
-        movieMediaId: d?.mediaId ?? docId,
-        showRefPath: null,
-      };
-    };
-
-    const mapShow = (d: any, refPath: string): HeroPick | null => {
-      const resolvedTitle =
-        typeof d?.showTitle === "string" && d.showTitle.trim()
-          ? d.showTitle
-          : (d?.title ?? "");
-
-      const backdropUrl = d?.backdropUrl || null;
-      const posterUrl = d?.posterUrl || null;
-      if (!resolvedTitle || (!backdropUrl && !posterUrl)) return null;
-
-      return {
-        kind: "tv",
-        title: resolvedTitle,
-        overview: d?.overview || d?.description || "",
-        mediaType: "tv",
-        videoLink: d?.videoLink || null,
-        backdropUrl,
-        posterUrl,
-        tmdbId: d?.tmdbId ?? d?.tmdbShowId ?? null,
-        releaseDate: d?.firstAirDate || "",
-        voteAverage: d?.voteAverage ?? 0,
-        genres: Array.isArray(d?.genres) ? (d.genres as string[]) : [],
-        movieMediaId: null,
-        showRefPath: refPath,
-      };
-    };
-
-    async function loadRandomHero() {
-      try {
-        const moviesQ = query(collection(db, `users/${uid}/media`), limit(24));
-        const showsQ = query(collection(db, `users/${uid}/shows`), limit(24));
-
-        const [moviesSnap, showsSnap] = await Promise.all([getDocs(moviesQ), getDocs(showsQ)]);
-
-        const candidates: HeroPick[] = [];
-
-        moviesSnap.forEach((snap) => {
-          const mapped = mapMovie(snap.data(), snap.id);
-          if (mapped) candidates.push(mapped);
-        });
-
-        showsSnap.forEach((snap) => {
-          const mapped = mapShow(snap.data(), snap.ref.path);
-          if (mapped) candidates.push(mapped);
-        });
-
-        if (cancelled) return;
-
-        if (candidates.length === 0) {
-          setHero(null);
-          setHeroLoading(false);
-          return;
-        }
-
-        const pick = candidates[Math.floor(Math.random() * candidates.length)];
-        setHero(pick);
-      } catch {
-        setHero(null);
-      } finally {
-        if (!cancelled) setHeroLoading(false);
-      }
-    }
-
-    void loadRandomHero();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [uid]);
+  const continueMediaItems: MediaItem[] = hasContinue
+    ? continueItems.map((it) => ({
+        id: it.id,
+        title: it.title,
+        poster_path: it.poster_path,
+        backdrop_path: it.backdrop_path,
+        release_date: it.release_date ?? "2000-01-01",
+        media_type: it.media_type,
+      }))
+    : [];
 
   return (
     <div className="space-y-12">
-      {/* 0) Homepage Hero */}
-      {heroLoading && (
-        <div className="relative aspect-video w-full rounded-xl overflow-hidden">
-          <div className="absolute inset-0 animate-pulse bg-muted/40" />
-        </div>
-      )}
-      {!heroLoading && hero && (
-        <HomepageHero
-          item={hero}
-          onPlay={async () => {
-            if (!uid) return;
-
-            if (hero.kind === "movie") {
-              const movieId = hero.movieMediaId ?? null;
-              if (movieId) {
-                setSelectedMediaId(movieId);
-                setSelectedStartTime(null); // clear any prior resume
-                setSelectedTitle(hero.title);
-                setPlayerOpen(true);
-              }
-              return;
-            }
-
-            if (hero.kind === "tv" && hero.showRefPath) {
-              try {
-                const { mediaId, startTime, title } = await resolveShowPlayTargetByRef(hero.showRefPath);
-                setSelectedMediaId(mediaId);
-                setSelectedStartTime(startTime ?? 0);
-                setSelectedTitle(title ?? hero.title);
-                setPlayerOpen(true);
-              } catch {
-                // swallow (optional: toast)
-              }
-              return;
-            }
-          }}
-        />
-      )}
-
       {/* Empty-state callout for Collections */}
       {!pinnedLoading && pinned.length === 0 && (
         <div
@@ -468,70 +385,74 @@ export default function BrowsePage() {
           </div>
 
           {/* Preview skeletons */}
-          <div className="mt-4 grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-3" aria-hidden="true">
+          <div
+            className="mt-4 grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-3"
+            aria-hidden="true"
+          >
             {Array.from({ length: 6 }).map((_, i) => (
               <div
                 key={i}
                 className="aspect-[2/3] w-full rounded-xl border overflow-hidden"
               >
-                <div style={{ background: "#404040" }} className="h-full w-full bg-muted/40 animate-pulse" />
+                <div
+                  style={{ background: "#404040" }}
+                  className="h-full w-full bg-muted/40 animate-pulse"
+                />
               </div>
             ))}
           </div>
         </div>
       )}
 
-{/* Continue Watching */}
-{!continueLoading && continueItems.length > 0 && (
-  <MediaCarousel
-    title="Continue Watching"
-    items={continueItems.map((it) => ({
-      id: it.id,
-      title: it.title,
-      poster_path: it.poster_path,
-      backdrop_path: it.backdrop_path,
-      release_date: it.release_date ?? "2000-01-01",
-      media_type: it.media_type,
-    }))}
-    peekNext
-    loop={false}
-    showArrows={false}
-    layout="horizontal"
-    cardOverrides={{
-      showTitle: true,
-      showYear: false,
-      showWatchlist: false,
-      size: "lg",
-    }}
-    // enable per-card progress overlays
-    enableProgress
-    uid={uid}
-    getItemHref={(it) =>
-      it.media_type === "tv" ? `/television/${it.id}` : `/movies/${it.id}`
-    }
-    onPlayItem={async (it, opts) => {
-      if (!uid) return;
+      {/* If there are NO pinned rows but we DO have Continue Watching, show it on its own */}
+      {pinned.length === 0 && hasContinue && (
+        <MediaCarousel
+          title="Continue Watching"
+          items={continueMediaItems}
+          peekNext
+          loop={false}
+          showArrows={false}
+          layout="horizontal"
+          cardOverrides={{
+            showTitle: true,
+            showYear: false,
+            showWatchlist: false,
+            size: "lg",
+          }}
+          enableProgress
+          uid={uid}
+          getItemHref={(it) =>
+            it.media_type === "tv" ? `/television/${it.id}` : `/movies/${it.id}`
+          }
+          onPlayItem={async (it, opts) => {
+            if (!uid) return;
 
-      // For Continue Watching, `it.id` is an actual media document id (movie or episode)
-      // We want to *play that specific item*, not resolve show → first episode.
-      // `opts?.startTime` carries restart/resume from the card.
-      setSelectedMediaId(it.id);
-      setSelectedStartTime(
-        typeof opts?.startTime === "number" ? opts.startTime : null
-      );
-      setSelectedTitle(it.title);
-      setPlayerOpen(true);
-    }}
-  />
-)}
+            // For Continue Watching, `it.id` is an actual media document id (movie or episode)
+            setSelectedMediaId(it.id);
+            setSelectedStartTime(
+              typeof opts?.startTime === "number" ? opts.startTime : null
+            );
+            setSelectedTitle(it.title);
+            setPlayerOpen(true);
+          }}
+          onMarkWatchedItem={async (it) => {
+            try {
+              await markPlaybackFinished(it.id);
+              // useContinueWatching + usePlaybackProgress should react to the doc deletion
+            } catch (err) {
+              console.error("[homepage] failed to mark watched", err);
+            }
+          }}
+        />
+      )}
 
-
-      {/* 1) User-pinned Collections (if any) */}
-      {pinned.map((row) => {
+      {/* Pinned Collections, with Continue Watching injected after the first row */}
+      {pinned.map((row, index) => {
         const isHorizontal =
-          row.style === "horizontal-posters-large" || row.style === "horizontal-posters-small";
+          row.style === "horizontal-posters-large" ||
+          row.style === "horizontal-posters-small";
 
-        const isFeatured = row.style === "horizontal-poster-featured"; // 👈 NEW
+        const isFeatured = row.style === "horizontal-poster-featured";
 
         const layout = isFeatured ? "featured" : isHorizontal ? "horizontal" : "vertical";
 
@@ -540,9 +461,8 @@ export default function BrowsePage() {
             ? "lg"
             : "sm";
 
-        return (
+        const rowCarousel = (
           <MediaCarousel
-            key={`pinned:${row.id}`}
             title={row.title}
             items={row.items}
             peekNext
@@ -555,6 +475,7 @@ export default function BrowsePage() {
               showWatchlist: false,
               size,
             }}
+            hideHeader={isFeatured} // 👈 hide collection title for featured rows
             getItemHref={(it) =>
               it.media_type === "tv" ? `/television/${it.id}` : `/movies/${it.id}`
             }
@@ -562,25 +483,25 @@ export default function BrowsePage() {
             uid={uid}
             onPlayItem={async (it, opts) => {
               if (!uid) return;
-      
+
               // MOVIE: id is already a streamable mediaId
               if (it.media_type !== "tv") {
                 setSelectedMediaId(it.id);
-      
-                // ✅ Respect the resume time sent from the card (MediaCarousel / MediaCard)
+
                 const startTime =
                   typeof opts?.startTime === "number" ? opts.startTime : null;
-      
+
                 setSelectedStartTime(startTime);
                 setSelectedTitle(it.title);
                 setPlayerOpen(true);
                 return;
               }
-      
+
               // TV: resolve via show-level helper (nextUp -> lastPlayed -> first)
               try {
                 const showRefPath = `users/${uid}/shows/${it.id}`;
-                const { mediaId, startTime, title } = await resolveShowPlayTargetByRef(showRefPath);
+                const { mediaId, startTime, title } =
+                  await resolveShowPlayTargetByRef(showRefPath);
                 setSelectedMediaId(mediaId);
                 setSelectedStartTime(startTime ?? 0);
                 setSelectedTitle(title ?? it.title);
@@ -606,6 +527,59 @@ export default function BrowsePage() {
               });
             }}
           />
+        );
+
+        // After the first pinned row, inject Continue Watching (if exists)
+        if (index === 0 && hasContinue) {
+          return (
+            <div key={`pinned-with-continue:${row.id}`} className="space-y-10">
+              {rowCarousel}
+
+              <MediaCarousel
+                title="Continue Watching"
+                items={continueMediaItems}
+                peekNext
+                loop={false}
+                showArrows={false}
+                layout="horizontal"
+                cardOverrides={{
+                  showTitle: true,
+                  showYear: false,
+                  showWatchlist: false,
+                  size: "lg",
+                }}
+                enableProgress
+                uid={uid}
+                getItemHref={(it) =>
+                  it.media_type === "tv" ? `/television/${it.id}` : `/movies/${it.id}`
+                }
+                onPlayItem={async (it, opts) => {
+                  if (!uid) return;
+
+                  setSelectedMediaId(it.id);
+                  setSelectedStartTime(
+                    typeof opts?.startTime === "number" ? opts.startTime : null
+                  );
+                  setSelectedTitle(it.title);
+                  setPlayerOpen(true);
+                }}
+                onMarkWatchedItem={async (it) => {
+                  try {
+                    await markPlaybackFinished(it.id);
+                    // useContinueWatching + usePlaybackProgress should react to the doc deletion
+                  } catch (err) {
+                    console.error("[homepage] failed to mark watched", err);
+                  }
+                }}
+              />
+            </div>
+          );
+        }
+
+        return (
+          <div key={`pinned:${row.id}`}>
+            {rowCarousel}
+          </div>
         );
       })}
 

@@ -12,20 +12,22 @@ import {
 import MediaCard from "./media-card";
 import Link from "next/link";
 import Image from "next/image";
-import { ArrowRight, Play, RotateCcw } from "lucide-react";
+import { ArrowRight, Play, Check } from "lucide-react";
 import * as React from "react";
 import { cn } from "@/lib/utils";
-import { WatchlistButton } from "@/components/watchlist-button";
-import { Badge } from "@/components/ui/badge";
 import { usePlaybackProgress } from "@/hooks/usePlaybackProgress";
 
 type CardSize = "sm" | "lg";
 type Layout = "vertical" | "horizontal" | "featured";
 
-// --- Trailer helpers (same logic as HomepageHero) -------------------------
+/* =============================================================================
+ * Trailer helpers (same logic as HomepageHero)
+ *  - Shared YouTube ID parsing + simple phase state for hero trailers
+ * ========================================================================== */
 
 type VideoPhase = "preload" | "playing" | "finished";
 
+// Extract a YouTube video ID from a variety of URL formats
 function getYouTubeId(url?: string | null): string | null {
   if (!url) return null;
   const regExp =
@@ -33,6 +35,12 @@ function getYouTubeId(url?: string | null): string | null {
   const match = url.match(regExp);
   return match && match[2].length === 11 ? match[2] : null;
 }
+
+/* =============================================================================
+ * MediaCarousel props
+ *  - Generic carousels used across home, collections, etc.
+ *  - Supports multiple layouts + custom navigation + progress
+ * ========================================================================== */
 
 interface MediaCarouselProps {
   title: string;
@@ -53,14 +61,20 @@ interface MediaCarouselProps {
   // onPlay can receive a startTime/restart flag
   onPlayItem?: (item: MediaItem, opts?: { startTime?: number; restart?: boolean }) => void;
 
+  // called when the user hits "Mark as watched" on a card
+  onMarkWatchedItem?: (item: MediaItem) => void;
+
   layout?: Layout;
 
   // per-card progress via /users/{uid}/playback/{mediaId}
   enableProgress?: boolean;
   uid?: string | null;
+
+  // Hide the carousel header (title + See All)
+  hideHeader?: boolean;
 }
 
-/** Small helper */
+/** Small helper: format seconds as m:ss for resume chips */
 function formatTimeShort(sec: number | undefined) {
   if (!sec || sec <= 0) return "0:00";
   const s = Math.floor(sec % 60)
@@ -70,24 +84,42 @@ function formatTimeShort(sec: number | undefined) {
   return `${m}:${s}`;
 }
 
+/* =============================================================================
+ * HorizontalCard
+ *  - 16:9 tile with hover play/resume, progress bar, mark-as-watched, and edit dots
+ * ========================================================================== */
+
 /** Horizontal (16:9) with progress + resume */
 function HorizontalCard(props: {
   item: MediaItem;
   href?: string | null;
   onPlay?: ((opts?: { startTime?: number; restart?: boolean }) => void) | undefined;
   onEditMedia?: (() => void) | null;
+  onMarkWatched?: (() => void) | undefined;
   showTitle?: boolean;
 
   // progress
   progressPercent?: number;
   resumeSeconds?: number | null;
 }) {
-  const { item, href, onPlay, onEditMedia, showTitle = true, progressPercent, resumeSeconds } =
-    props;
+  const {
+    item,
+    href,
+    onPlay,
+    onEditMedia,
+    onMarkWatched,
+    showTitle = true,
+    progressPercent,
+    resumeSeconds,
+  } = props;
 
   const img = item.backdrop_path || "";
   const titleText = item.title;
+
+  // Resume is only enabled if we have a meaningful position (>= 10s)
   const hasResume = typeof resumeSeconds === "number" && resumeSeconds >= 10;
+
+  // Clamp progress to [0, 100]
   const pct = Math.max(0, Math.min(100, Math.floor(progressPercent ?? 0)));
 
   const body = (
@@ -143,26 +175,39 @@ function HorizontalCard(props: {
               <Play className="h-4 w-4 mr-2" />
               {hasResume ? `Resume • ${formatTimeShort(resumeSeconds ?? 0)}` : "Play"}
             </button>
-
-            {/* Horizontal cards still keep Restart */}
-            {hasResume && (
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  onPlay({ startTime: 0, restart: true });
-                }}
-                className="pointer-events-auto absolute bottom-2 right-2 inline-flex items-center gap-1 rounded-full bg-black/60 px-2 py-1 text-xs text-white shadow-sm ring-1 ring-white/10"
-                title="Restart from beginning"
-              >
-                <RotateCcw className="h-3.5 w-3.5" /> Restart
-              </button>
-            )}
           </div>
         )}
 
-        {/* Edit dots */}
+        {/* Mark as Watched chip (top-right).
+            - If `onMarkWatched` exists, we call it
+            - Otherwise we restart playback from 0 */}
+        {(onMarkWatched || onPlay) && hasResume && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+
+              if (onMarkWatched) {
+                onMarkWatched();
+              } else if (onPlay) {
+                onPlay({ startTime: 0, restart: true });
+              }
+            }}
+            className={cn(
+              "pointer-events-auto absolute top-2 right-2",
+              "inline-flex items-center gap-1 rounded-full bg-black/70 px-3 py-1.5",
+              "text-xs font-semibold text-white shadow-sm ring-1 ring-white/20",
+              "opacity-0 transition-opacity duration-200 group-hover:opacity-100"
+            )}
+            title="Mark as watched"
+          >
+            <Check className="h-3.5 w-3.5" />
+            Mark as watched
+          </button>
+        )}
+
+        {/* Edit dots for quick metadata edits on the card */}
         {onEditMedia && (
           <button
             type="button"
@@ -177,7 +222,7 @@ function HorizontalCard(props: {
           </button>
         )}
 
-        {/* Bottom progress bar */}
+        {/* Bottom progress bar (only show when partially watched) */}
         {pct > 0 && pct < 100 && (
           <div className="absolute inset-x-0 bottom-0 h-1.5 bg-black/30">
             <div className="h-full bg-white/90" style={{ width: `${pct}%` }} />
@@ -196,6 +241,14 @@ function HorizontalCard(props: {
   );
 }
 
+/* =============================================================================
+ * FeaturedCard
+ *  - Hero-style slide:
+ *      • Supports auto-playing trailer
+ *      • Shows overview + genres
+ *      • Uses progress for resume bar
+ * ========================================================================== */
+
 /** Featured card: hero-like (no Restart), Resume for movies & TV + trailer support */
 function FeaturedCard(props: {
   item: MediaItem;
@@ -204,9 +257,20 @@ function FeaturedCard(props: {
   onEditMedia?: (() => void) | null;
   progressPercent?: number;
   resumeSeconds?: number | null;
+  // Only play trailer when this slide is the active one
+  isActive?: boolean;
 }) {
-  const { item, href, onPlay, onEditMedia, progressPercent, resumeSeconds } = props;
+  const {
+    item,
+    href,
+    onPlay,
+    onEditMedia,
+    progressPercent,
+    resumeSeconds,
+    isActive = false,
+  } = props;
 
+  // Prefer backdrop but fall back to poster
   const bg = item.backdrop_path || item.poster_path || "";
   const genres: string[] = Array.isArray((item as any).genres)
     ? ((item as any).genres as string[])
@@ -216,31 +280,54 @@ function FeaturedCard(props: {
   const videoLink = (item as any).videoLink as string | undefined;
   const videoId = React.useMemo(() => getYouTubeId(videoLink), [videoLink]);
 
+  // Simple phase machine for hero video
   const [phase, setPhase] = React.useState<VideoPhase>(
-    videoId ? "preload" : "finished"
+    videoId && isActive ? "preload" : "finished"
   );
 
+  // When the slide becomes active/inactive, restart or stop the trailer cycle
   React.useEffect(() => {
-    if (!videoId) return;
+    if (!videoId) {
+      setPhase("finished");
+      return;
+    }
+
+    if (!isActive) {
+      // If this slide is no longer active, force background image only
+      setPhase("finished");
+      return;
+    }
+
+    // When it becomes active, restart the preload → play sequence
+    setPhase("preload");
+  }, [videoId, isActive]);
+
+  // Timers only run while this slide is active
+  React.useEffect(() => {
+    if (!videoId || !isActive) return;
 
     if (phase === "preload") {
+      // Delay before fading in the trailer
       const playTimer = setTimeout(() => setPhase("playing"), 6000);
       return () => clearTimeout(playTimer);
     }
 
     if (phase === "playing") {
+      // After some time, fall back to static artwork
       const finishTimer = setTimeout(() => setPhase("finished"), 20000);
       return () => clearTimeout(finishTimer);
     }
-  }, [phase, videoId]);
+  }, [phase, videoId, isActive]);
 
+  // Clamp progress
   const pct = Math.max(0, Math.min(100, Math.floor(progressPercent ?? 0)));
-
   const isTv = item.media_type === "tv";
 
   // --- Resume detection (from playback docs) ---
   const hasResumeFromTime =
-    typeof resumeSeconds === "number" && Number.isFinite(resumeSeconds) && resumeSeconds >= 10;
+    typeof resumeSeconds === "number" &&
+    Number.isFinite(resumeSeconds) &&
+    resumeSeconds >= 10;
 
   const hasResumeFromPercent =
     typeof progressPercent === "number" &&
@@ -254,20 +341,20 @@ function FeaturedCard(props: {
   // For movies we safely show time; for TV we omit the timestamp (show just "Resume").
   const showTimeChip = !isTv && hasResumeFromTime;
 
+  // Primary CTA label (kept for reference; button text below is currently hardcoded)
   const primaryLabel = hasResume
     ? showTimeChip
       ? `Resume • ${formatTimeShort(resumeSeconds ?? 0)}`
       : "Resume"
     : isTv
-    ? "Resume" // Fallback label for TV: UX says "Resume", actual start logic is still handled in the parent
-    : "Play";
+    ? "Resume"
+    : "Watch Now"; // label is overridden below anyway
 
   const handlePlayClick = (e: React.MouseEvent<HTMLButtonElement>) => {
     e.preventDefault();
     e.stopPropagation();
     if (!onPlay) return;
 
-    // If we know the resume time, pass it down; otherwise let the parent logic decide
     if (hasResumeFromTime) {
       onPlay({ startTime: resumeSeconds ?? 0 });
     } else {
@@ -277,18 +364,23 @@ function FeaturedCard(props: {
 
   const Content = (
     <div className="group relative w-full">
-      <div className="relative aspect-video w-full overflow-hidden rounded-xl">
+      {/* NOTE: taller aspect on mobile, regular 16:9 on desktop */}
+      <div className="relative w-full overflow-hidden rounded-xl aspect-[4/5] sm:aspect-video">
         {/* Background media: trailer video + fallback image (hero-style) */}
         <div className="absolute inset-0 bg-black">
-          {videoId && (
+          {videoId && isActive && (
             <iframe
               src={`https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&mute=1&controls=0&loop=1&playlist=${videoId}&playsinline=1&iv_load_policy=3&modestbranding=1`}
               frameBorder="0"
               allow="autoplay; encrypted-media"
               allowFullScreen
               className={cn(
-                "absolute inset-0 w-full h-full object-cover transition-opacity duration-1000",
-                phase === "playing" ? "opacity-100" : "opacity-0 pointer-events-none"
+                "absolute inset-0 h-full w-full object-cover transition-opacity duration-1000",
+                // slight zoom on mobile, normal on larger screens
+                "scale-[2]",
+                phase === "playing"
+                  ? "opacity-100"
+                  : "opacity-0 pointer-events-none"
               )}
             />
           )}
@@ -300,9 +392,11 @@ function FeaturedCard(props: {
               fill
               className={cn(
                 "object-cover transition-opacity duration-1000",
-                phase === "playing" ? "opacity-0" : "opacity-100"
+                // slight zoom on mobile, normal on larger screens
+                "scale-[1.12] sm:scale-100",
+                phase === "playing" && isActive ? "opacity-0" : "opacity-100"
               )}
-              sizes="(max-width: 768px) 90vw, (max-width: 1280px) 80vw, 100vw"
+              sizes="(max-width: 768px) 100vw, (max-width: 1280px) 80vw, 100vw"
             />
           ) : (
             <div className="absolute inset-0 bg-muted" />
@@ -310,49 +404,56 @@ function FeaturedCard(props: {
         </div>
 
         {/* Hero-style gradients */}
-        <div className="absolute inset-0 bg-gradient-to-t from-background/80 via-background/50 to-transparent" />
-        <div className="absolute inset-0 bg-gradient-to-r from-black/80 via-black/40 to-transparent" />
+        <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/50 to-transparent" /> 
+        {/* <div className="absolute inset-0 bg-gradient-to-r from-black/80 via-black/40 to-transparent" />*/}
 
         {/* Content */}
-        <div className="absolute inset-0 flex items-center p-6 sm:p-8">
-          <div className="w-full max-w-md md:max-w-lg lg:max-w-xl space-y-3 sm:space-y-4">
-            <h3 className="font-headline text-2xl sm:text-3xl md:text-4xl font-bold text-foreground drop-shadow-2xl">
+        <div className="absolute inset-0 flex items-end justify-center px-4 py-6 sm:items-center sm:justify-start sm:p-8">
+          <div className="w-full max-w-md md:max-w-lg lg:max-w-xl space-y-3 sm:space-y-4 text-center sm:text-left">
+            <h3 className="font-headline text-2xl sm:text-3xl md:text-4xl font-bold text-white drop-shadow-2xl">
               {item.title}
             </h3>
 
+            {/* Optional overview – keep for desktop, hide on small to match Apple TV vibe */}
             {(item as any).overview ? (
-              <p className="line-clamp-2 sm:line-clamp-3 text-sm sm:text-base text-foreground/80 leading-relaxed drop-shadow-lg">
+              <p className="sm:block line-clamp-2 sm:line-clamp-3 text-sm sm:text-base text-white/80 leading-relaxed drop-shadow-lg">
                 {(item as any).overview}
               </p>
             ) : null}
 
+            {/* Compact genre row */}
             {genres.length > 0 && (
-              <div className="hidden sm:flex flex-wrap items-center gap-2">
-                {genres.slice(0, 6).map((g) => (
-                  <Badge key={g} variant="secondary">
-                    {g}
-                  </Badge>
+              <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-xs sm:text-sm font-semibold text-white sm:justify-start">
+                {genres.slice(0, 4).map((g, idx) => (
+                  <React.Fragment key={g}>
+                    {idx > 0 && (
+                      <span className="opacity-75" aria-hidden="true">
+                        •
+                      </span>
+                    )}
+                    <span className="opacity-90">{g}</span>
+                  </React.Fragment>
                 ))}
               </div>
             )}
 
-            <div className="flex items-center gap-2 pt-1">
+            <div className="flex items-center justify-center gap-2 pt-2 sm:justify-start">
               {onPlay && (
                 <button
                   type="button"
                   onClick={handlePlayClick}
-                  className="inline-flex h-10 sm:h-11 items-center rounded-md bg-primary px-4 text-sm font-bold text-primary-foreground shadow hover:opacity-95"
+                  className={cn(
+                    "inline-flex h-11 items-center justify-center rounded-full px-4 text-sm font-bold shadow-lg transition-opacity",
+                    // 55% width on mobile, auto on larger screens
+                    "w-[55%] sm:w-[55%] max-w-xs mx-auto sm:mx-0",
+                    // custom Apple-TV-style colors
+                    "bg-[#f5f5f5] text-[#2f4f4f]"
+                  )}
                 >
-                  <Play className="mr-2 h-4 w-4" />
-                  {primaryLabel}
+                  Watch Now
                 </button>
               )}
-
-              <WatchlistButton
-                item={item}
-                variant="secondary"
-                className="font-bold h-10 sm:h-11"
-              />
+              {/* No Watchlist button in featured layout */}
             </div>
           </div>
         </div>
@@ -360,10 +461,14 @@ function FeaturedCard(props: {
         {/* Bottom progress bar */}
         {pct > 0 && pct < 100 && (
           <div className="absolute inset-x-0 bottom-0 h-1.5 bg-black/30">
-            <div className="h-full bg-white/90" style={{ width: `${pct}%` }} />
+            <div
+              className="h-full bg-white/90"
+              style={{ width: `${pct}%` }}
+            />
           </div>
         )}
 
+        {/* Edit affordance in hero */}
         {onEditMedia && (
           <button
             type="button"
@@ -390,6 +495,15 @@ function FeaturedCard(props: {
   );
 }
 
+/* =============================================================================
+ * MediaCarousel
+ *  - Main carousel wrapper around MediaCard/HorizontalCard/FeaturedCard
+ *  - Handles:
+ *      • Progress hookup (usePlaybackProgress)
+ *      • Layout sizing & Embla options
+ *      • See All header + navigation arrows
+ * ========================================================================== */
+
 export function MediaCarousel({
   title,
   items,
@@ -401,11 +515,13 @@ export function MediaCarousel({
   cardOverrides,
   getItemHref,
   onPlayItem,
+  onMarkWatchedItem,
   layout = "vertical",
   enableProgress = false,
   uid = null,
+  hideHeader = false,
 }: MediaCarouselProps) {
-  // Normalize paths
+  // Normalize image paths (empty strings → undefined) to keep <Image> happy
   const normalized = React.useMemo(
     () =>
       items.map((it) => ({
@@ -429,13 +545,15 @@ export function MediaCarousel({
     [enableProgress, normalized]
   );
 
+  // Map of mediaId → { percent, position, ... }
   const progressMap = usePlaybackProgress(uid ?? null, progressIds, {
-    realtime: false, // homepage bars don’t need realtime
+    realtime: false,
   });
 
   const size: CardSize = cardOverrides?.size ?? "sm";
   const isFeatured = layout === "featured";
 
+  // Per-layout basis widths for carousel items (responsive)
   const basisClasses = isFeatured
     ? "basis-full"
     : layout === "horizontal"
@@ -446,6 +564,7 @@ export function MediaCarousel({
     ? "basis-2/3 pl-4 sm:basis-1/2 md:basis-1/3 lg:basis-1/3 xl:basis-1/4 2xl:basis-1/5"
     : "basis-1/2 pl-4 sm:basis-1/4 md:basis-1/5 lg:basis-1/6 xl:basis-1/7 2xl:basis-[12.5%]";
 
+  // Embla carousel options (dragFree disabled for featured hero)
   const carouselOpts = React.useMemo(
     () => ({ align: "start" as const, loop, dragFree: isFeatured ? false : true }),
     [isFeatured, loop]
@@ -454,40 +573,80 @@ export function MediaCarousel({
   const carouselClass = cn("w-full", !isFeatured && peekNext && "pr-6 -mr-6");
   const contentClass = isFeatured ? "" : "-ml-2";
 
+  // Embla instance + active index (used for featured trailer activation)
+  const [emblaApi, setEmblaApi] = React.useState<any | null>(null);
+  const [activeIndex, setActiveIndex] = React.useState(0);
+
+  React.useEffect(() => {
+    if (!emblaApi) return;
+
+    const onSelect = () => {
+      const snapIndex = emblaApi.selectedScrollSnap();
+      setActiveIndex(snapIndex);
+    };
+
+    onSelect();
+    emblaApi.on("select", onSelect);
+
+    return () => {
+      emblaApi.off("select", onSelect);
+    };
+  }, [emblaApi]);
+
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h2 className="font-headline text-3xl font-bold tracking-tight">{title}</h2>
-        {seeAllHref && (
-          <Link
-            href={seeAllHref}
-            className="flex items-center gap-2 text-sm font-medium text-primary hover:text-primary/80"
-          >
-            See All <ArrowRight className="h-4 w-4" />
-          </Link>
-        )}
-      </div>
+      {/* Header row: title + optional "See All" link */}
+      {!hideHeader && (
+        <div className="flex items-center justify-between">
+          <h2 className="font-headline text-3xl font-bold tracking-tight">{title}</h2>
+          {seeAllHref && (
+            <Link
+              href={seeAllHref}
+              className="flex items-center gap-2 text-sm font-medium text-primary hover:text-primary/80"
+            >
+              See All <ArrowRight className="h-4 w-4" />
+            </Link>
+          )}
+        </div>
+      )}
 
-      <Carousel opts={carouselOpts} className={carouselClass}>
+      <Carousel
+        opts={carouselOpts}
+        className={carouselClass}
+        setApi={setEmblaApi}
+      >
         <CarouselContent className={contentClass}>
-          {normalized.map((item) => {
+          {normalized.map((item, index) => {
             const prog = progressMap[String(item.id)];
             const progressPercent = prog?.percent ?? 0;
+
+            // Only treat as resumable if we have partial progress (1–99%)
             const resumeSeconds =
               prog && prog.percent >= 1 && prog.percent < 100
                 ? prog.position ?? null
                 : null;
 
+            // Wrap onPlayItem so callers don't have to know about MediaItem
             const onPlay =
               onPlayItem &&
               ((opts?: { startTime?: number; restart?: boolean }) =>
                 onPlayItem(item, opts));
 
+            const onMarkWatched =
+              onMarkWatchedItem &&
+              (() => {
+                onMarkWatchedItem(item);
+              });
+
+            // Default route if caller didn't provide getItemHref
             const href =
               getItemHref?.(item) ??
               (item.media_type === "tv"
                 ? `/television/${item.id}`
                 : `/movies/${item.id}`);
+
+            // For featured layout, track if this slide is currently active
+            const isActiveSlide = isFeatured ? index === activeIndex : false;
 
             return (
               <CarouselItem key={item.id} className={basisClasses}>
@@ -499,6 +658,7 @@ export function MediaCarousel({
                     onEditMedia={onEditMedia ? () => onEditMedia(item) : null}
                     progressPercent={progressPercent}
                     resumeSeconds={resumeSeconds}
+                    isActive={isActiveSlide}
                   />
                 ) : layout === "horizontal" ? (
                   <HorizontalCard
@@ -506,6 +666,7 @@ export function MediaCarousel({
                     href={href}
                     onPlay={onPlay}
                     onEditMedia={onEditMedia ? () => onEditMedia(item) : null}
+                    onMarkWatched={onMarkWatched}
                     showTitle={
                       cardOverrides?.showTitle !== undefined
                         ? cardOverrides.showTitle

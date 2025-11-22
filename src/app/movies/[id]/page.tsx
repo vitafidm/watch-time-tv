@@ -1,14 +1,12 @@
 'use client';
 
-import { useState, useEffect, use } from 'react';
+import { useState, useEffect, use, useMemo } from 'react';
 import Image from 'next/image';
 import { useAuthUser } from '@/hooks/useAuthUser';
 import { db } from '@/lib/firebase.client';
 import { doc, getDoc, onSnapshot, deleteDoc } from 'firebase/firestore';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
-import { Play, Check } from 'lucide-react';
+import { Check, Play } from 'lucide-react';
 import { WatchlistButton } from '@/components/watchlist-button';
 import { PlayerDialog } from '@/components/PlayerDialog';
 import { CastSection } from '@/components/CastSection';
@@ -16,8 +14,8 @@ import { cn } from '@/lib/utils';
 import { useToast } from '@/hooks/use-toast';
 
 type MovieDoc = {
-  type?: string;            // "movie"
-  mediaId?: string;         // streamable id
+  type?: string; // "movie"
+  mediaId?: string; // streamable id
   title?: string;
   normalizedTitle?: string;
   overview?: string;
@@ -30,6 +28,7 @@ type MovieDoc = {
   releaseDate?: string;
   voteAverage?: number;
   cast?: Array<{ name: string; character?: string; profileUrl?: string | null }>;
+  videoLink?: string | null; // optional trailer link (YouTube, etc.)
 };
 
 function normalizeGenres(raw: any): string[] {
@@ -38,7 +37,9 @@ function normalizeGenres(raw: any): string[] {
     if (!raw.length) return [];
     if (typeof raw[0] === 'string') return raw as string[];
     if (typeof raw[0] === 'object' && raw[0]?.name) {
-      return (raw as Array<{ name?: string }>).map(g => g?.name).filter(Boolean) as string[];
+      return (raw as Array<{ name?: string }>)
+        .map((g) => g?.name)
+        .filter(Boolean) as string[];
     }
   }
   if (Array.isArray(raw?.genreNames)) return raw.genreNames as string[];
@@ -55,7 +56,21 @@ function formatTimeShort(sec?: number | null) {
   return `${m}:${s}`;
 }
 
-export default function MovieDetailPage({ params }: { params: Promise<{ id: string }> }) {
+function getYouTubeId(url: string): string | null {
+  if (!url) return null;
+  const regExp =
+    /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
+  const match = url.match(regExp);
+  return match && match[2].length === 11 ? match[2] : null;
+}
+
+type VideoPhase = 'preload' | 'playing' | 'finished';
+
+export default function MovieDetailPage({
+  params,
+}: {
+  params: Promise<{ id: string }>;
+}) {
   const { user } = useAuthUser();
   const { toast } = useToast();
   const { id } = use(params);
@@ -120,7 +135,7 @@ export default function MovieDetailPage({ params }: { params: Promise<{ id: stri
     }
 
     const ref = doc(db, `users/${user.uid}/playback`, playbackId);
-    const unsub = onSnapshot(ref, snap => {
+    const unsub = onSnapshot(ref, (snap) => {
       if (!snap.exists()) {
         setResumeSeconds(null);
         setProgressPct(0);
@@ -163,6 +178,33 @@ export default function MovieDetailPage({ params }: { params: Promise<{ id: stri
     }
   };
 
+  // Trailer support (same pattern as Featured/ShowHero)
+  const videoId = useMemo(() => {
+    const link = (movie as any)?.videoLink;
+    if (typeof link === 'string' && link.trim()) {
+      return getYouTubeId(link);
+    }
+    return null;
+  }, [movie]);
+
+  const [phase, setPhase] = useState<VideoPhase>(
+    videoId ? 'preload' : 'finished'
+  );
+
+  useEffect(() => {
+    if (!videoId) return;
+
+    if (phase === 'preload') {
+      const playTimer = setTimeout(() => setPhase('playing'), 6000);
+      return () => clearTimeout(playTimer);
+    }
+
+    if (phase === 'playing') {
+      const finishTimer = setTimeout(() => setPhase('finished'), 20000);
+      return () => clearTimeout(finishTimer);
+    }
+  }, [phase, videoId]);
+
   if (loading) {
     return (
       <div className="container mx-auto p-4 space-y-8">
@@ -185,7 +227,9 @@ export default function MovieDetailPage({ params }: { params: Promise<{ id: stri
   if (!movie) {
     return (
       <div className="container mx-auto p-4 text-center">
-        <h1 className="font-headline text-2xl font-bold mb-4">Movie Not Found</h1>
+        <h1 className="font-headline text-2xl font-bold mb-4">
+          Movie Not Found
+        </h1>
         <p>The requested movie could not be found in your library.</p>
       </div>
     );
@@ -199,8 +243,12 @@ export default function MovieDetailPage({ params }: { params: Promise<{ id: stri
   const backdrop = movie.backdropUrl || movie.posterUrl || '';
   const poster = movie.posterUrl || '';
   const overview = movie.overview || movie.description || '';
-  const genres = normalizeGenres(movie.genres ?? movie.genreNames ?? movie.genresList);
-  const year = movie.releaseDate ? new Date(movie.releaseDate).getFullYear() : undefined;
+  const genres = normalizeGenres(
+    movie.genres ?? movie.genreNames ?? movie.genresList
+  );
+  const year = movie.releaseDate
+    ? new Date(movie.releaseDate).getFullYear()
+    : undefined;
 
   const hasResume =
     typeof resumeSeconds === 'number' &&
@@ -208,85 +256,117 @@ export default function MovieDetailPage({ params }: { params: Promise<{ id: stri
     progressPct > 0 &&
     progressPct < 100;
 
-  const primaryCtaLabel = hasResume
-    ? `Resume • ${formatTimeShort(resumeSeconds)}`
-    : 'Play';
-
   const playbackMediaId = movie.mediaId ?? id;
 
   return (
     <div className="container space-y-10" data-testid="movie-detail">
-      {/* Hero */}
-      <div className="relative aspect-video w-full overflow-hidden rounded-xl">
-        {backdrop ? (
-          <Image src={backdrop} alt={title} fill className="object-cover" priority />
-        ) : (
-          <div className="absolute inset-0 bg-muted" />
-        )}
-        <div className="absolute inset-0 bg-gradient-to-t from-background/80 via-background/50 to-transparent" />
+      {/* Hero – Apple TV–style, matches Horizontal Posters - Featured / ShowHero */}
+      <div className="relative w-full overflow-hidden rounded-xl aspect-[4/5] sm:aspect-video">
+        {/* Background: trailer + backdrop image */}
+        <div className="absolute inset-0 bg-black">
+          {videoId && (
+            <iframe
+              src={`https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&mute=1&controls=0&loop=1&playlist=${videoId}&playsinline=1&iv_load_policy=3&modestbranding=1`}
+              frameBorder="0"
+              allow="autoplay; encrypted-media"
+              allowFullScreen
+              className={cn(
+                'absolute inset-0 h-full w-full object-cover transition-opacity duration-1000',
+                'scale-[2]',
+                phase === 'playing'
+                  ? 'opacity-100'
+                  : 'opacity-0 pointer-events-none'
+              )}
+            />
+          )}
+
+          {backdrop ? (
+            <Image
+              src={backdrop}
+              alt={title}
+              fill
+              priority
+              className={cn(
+                'object-cover transition-opacity duration-1000',
+                'scale-[1.12] sm:scale-100',
+                videoId && phase === 'playing'
+                  ? 'opacity-0'
+                  : 'opacity-100'
+              )}
+            />
+          ) : (
+            <div className="absolute inset-0 bg-muted" />
+          )}
+        </div>
+
+        {/* Gradient overlay (left-right, no top-to-bottom wash) */}
         <div className="absolute inset-0 bg-gradient-to-r from-black/80 via-black/40 to-transparent" />
 
-        <div className="absolute inset-0 flex items-center p-6 sm:p-10">
-          <div className="w-full max-w-md md:max-w-lg lg:max-w-xl space-y-4">
-            <h1 className="font-headline text-3xl sm:text-4xl md:text-5xl lg:text-6xl font-bold text-foreground drop-shadow-2xl">
+        {/* Content: bottom/center on mobile, left-aligned on larger screens */}
+        <div className="absolute inset-0 flex items-end justify-center px-4 py-6 sm:items-center sm:justify-start sm:p-8">
+          <div className="w-full max-w-md md:max-w-lg lg:max-w-xl space-y-3 sm:space-y-4 text-center sm:text-left">
+            <h1 className="font-headline text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-bold text-white drop-shadow-2xl">
               {title}
               {year ? (
-                <span className="ml-3 text-foreground/70 text-3xl md:text-4xl">
+                <span className="ml-2 text-white/70 text-lg sm:text-2xl">
                   ({year})
                 </span>
               ) : null}
             </h1>
 
-            {overview ? (
-              <p className="line-clamp-2 sm:line-clamp-3 md:line-clamp-none text-sm sm:text-base text-foreground/80 leading-relaxed drop-shadow">
+            {overview && (
+              <p className="line-clamp-2 sm:line-clamp-3 text-sm sm:text-base text-white/80 leading-relaxed drop-shadow-lg">
                 {overview}
               </p>
-            ) : null}
+            )}
 
             {genres.length > 0 && (
-              <div className="hidden sm:flex flex-wrap items-center gap-2">
-                {genres.slice(0, 8).map((g) => (
-                  <Badge key={g} variant="secondary">
-                    {g}
-                  </Badge>
+              <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-xs sm:text-sm font-semibold text-white sm:justify-start">
+                {genres.slice(0, 4).map((g, idx) => (
+                  <span key={g} className="flex items-center gap-1">
+                    {idx > 0 && (
+                      <span className="opacity-75" aria-hidden="true">
+                        •
+                      </span>
+                    )}
+                    <span className="opacity-90">{g}</span>
+                  </span>
                 ))}
               </div>
             )}
 
-            <div className="flex flex-wrap items-center gap-2">
-              <Button
-                size="lg"
-                className="font-bold"
-                onClick={() => {
-                  setPlayerStartTime(hasResume ? resumeSeconds! : null);
-                  setPlayerOpen(true);
-                }}
-                disabled={!playbackMediaId}
-              >
-                <Play className="mr-2" />
-                {primaryCtaLabel}
-              </Button>
-
-              {/* Mark-as-watched removed from hero on purpose */}
-
-              <WatchlistButton
-                item={{
-                  id: playbackMediaId,
-                  title,
-                  overview,
-                  poster_path: poster,
-                  backdrop_path: backdrop,
-                  release_date: movie.releaseDate || '',
-                  vote_average: movie.voteAverage || 0,
-                  genres,
-                  media_type: 'movie',
-                }}
-                variant="secondary"
-                className="font-bold"
-              />
+            <div className="flex items-center justify-center gap-2 pt-2 sm:justify-start">
+              {playbackMediaId && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPlayerStartTime(hasResume ? resumeSeconds! : null);
+                    setPlayerOpen(true);
+                  }}
+                  className={cn(
+                    'inline-flex h-11 items-center justify-center rounded-full px-4 text-sm font-bold shadow-lg',
+                    'w-[55%] sm:w-[55%] max-w-xs mx-auto sm:mx-0',
+                    'bg-[#f5f5f5] text-[#2f4f4f]'
+                  )}
+                >
+                  {hasResume ? 'Resume' : 'Watch Now'}
+                </button>
+              )}
+              {/* No Watchlist button in hero to match Featured / ShowHero */}
             </div>
           </div>
         </div>
+
+        {/* Bottom progress bar on hero */}
+        {progressPct > 0 && progressPct < 100 && (
+          <div className="absolute inset-x-0 bottom-0 h-1.5 bg-black/30">
+            <div
+              className="h-full bg-white/90"
+              style={{ width: `${progressPct}%` }}
+              aria-hidden="true"
+            />
+          </div>
+        )}
       </div>
 
       {/* Watch now */}
@@ -319,7 +399,7 @@ export default function MovieDetailPage({ params }: { params: Promise<{ id: stri
             </div>
           )}
 
-          {/* Mark as watched pill (top-right) – now NOT a button to avoid nesting button-in-button */}
+          {/* Mark as watched pill (top-right) */}
           {hasResume && (
             <div
               role="button"
@@ -360,11 +440,13 @@ export default function MovieDetailPage({ params }: { params: Promise<{ id: stri
           >
             <span className="pointer-events-auto inline-flex items-center justify-center rounded-full bg-black/70 text-white shadow-lg px-4 h-11 text-sm font-bold">
               <Play className="h-4 w-4 mr-2" />
-              {hasResume ? `Resume • ${formatTimeShort(resumeSeconds)}` : 'Play'}
+              {hasResume
+                ? `Resume • ${formatTimeShort(resumeSeconds)}`
+                : 'Play'}
             </span>
           </div>
 
-          {/* Bottom progress bar */}
+          {/* Bottom progress bar on card */}
           {progressPct > 0 && progressPct < 100 && (
             <div className="absolute inset-x-0 bottom-0 h-1.5 bg-black/30">
               <div

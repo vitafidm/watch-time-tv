@@ -9,6 +9,17 @@ import { Play, Check } from "lucide-react";
 import * as React from "react";
 import { cn } from "@/lib/utils";
 
+/* =============================================================================
+ * Props
+ *  - Generic media tile used across rows/collections
+ *  - Supports:
+ *      • Optional link wrapper
+ *      • Hover play/resume overlay
+ *      • Progress + resume
+ *      • Watchlist or edit controls
+ *      • Optional "mark as watched" action
+ * ========================================================================== */
+
 interface MediaCardProps {
   item: MediaItem;
   href?: string | null;
@@ -29,6 +40,10 @@ interface MediaCardProps {
   onMarkWatched?: (() => void) | null;
 }
 
+/* =============================================================================
+ * MediaCard
+ * ========================================================================== */
+
 export function MediaCard({
   item,
   href = `/media/${item.id}`,
@@ -42,12 +57,17 @@ export function MediaCard({
   onRestart,
   onMarkWatched,
 }: MediaCardProps) {
+  // Normalize poster path (empty → "")
   const poster =
     typeof item.poster_path === "string" ? item.poster_path.trim() : "";
 
+  // Resume is only enabled if we have a meaningful offset
   const hasResume = typeof resumeSeconds === "number" && resumeSeconds >= 10;
+
+  // Clamp progress to [0, 100]
   const pct = Math.max(0, Math.min(100, Math.floor(progressPercent ?? 0)));
 
+  // Wrapper: either clickable Link or plain div, but both share the same group classes
   const Wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
     href ? (
       <Link href={href} className="group block" prefetch={false}>
@@ -60,6 +80,7 @@ export function MediaCard({
   return (
     <Wrapper>
       <div className="flex flex-col gap-2">
+        {/* Poster frame */}
         <div className="relative aspect-[2/3] w-full overflow-hidden rounded-lg shadow-lg bg-muted">
           {poster ? (
             <Image
@@ -76,7 +97,7 @@ export function MediaCard({
             </div>
           )}
 
-          {/* Hover overlay */}
+          {/* Hover overlay: darken + Play/Resume CTA + optional "mark as watched" */}
           {onPlay && (
             <div
               className="
@@ -87,6 +108,7 @@ export function MediaCard({
               "
               aria-hidden="true"
             >
+              {/* Dim background */}
               <div className="absolute inset-0 bg-black/45 rounded-lg" />
 
               {/* Main action = Resume if available; else Play */}
@@ -139,7 +161,7 @@ export function MediaCard({
             </div>
           )}
 
-          {/* Edit dots OR watchlist */}
+          {/* Top-right control: either edit button OR watchlist icon */}
           {onEditMedia ? (
             <button
               type="button"
@@ -173,7 +195,7 @@ export function MediaCard({
             )
           )}
 
-          {/* Bottom progress bar (visible always if pct > 0) */}
+          {/* Bottom progress bar (visible when partially watched) */}
           {pct > 0 && pct < 100 && (
             <div className="absolute inset-x-0 bottom-0 h-1.5 bg-black/30">
               <div
@@ -185,7 +207,7 @@ export function MediaCard({
           )}
         </div>
 
-        {/* Meta */}
+        {/* Meta: title + year */}
         {showTitle && (
           <div className="space-y-1 px-0.5">
             <h3 className="truncate font-headline text-base font-bold text-foreground">
@@ -193,6 +215,7 @@ export function MediaCard({
             </h3>
             {showYear && item.release_date ? (
               <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                {/* Year derived from ISO date string */}
                 <span>{new Date(item.release_date).getFullYear()}</span>
               </div>
             ) : null}

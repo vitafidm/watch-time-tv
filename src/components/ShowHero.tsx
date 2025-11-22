@@ -2,12 +2,8 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import Image from 'next/image';
-import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
 import { Play } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import type { MediaItem } from '@/lib/types';
-import { WatchlistButton } from '@/components/watchlist-button';
 
 type ShowData = {
   title: string;
@@ -24,9 +20,9 @@ type ShowData = {
 
 interface ShowHeroProps {
   show: ShowData;
-  /** Called when the primary CTA (Play/Resume) is clicked */
+  /** Called when the primary CTA is clicked */
   onPlay?: () => void;
-  /** If true, label the CTA as "Resume" instead of "Play" */
+  /** If true, label the CTA as "Resume" instead of "Watch Now" */
   hasResume?: boolean;
 }
 
@@ -45,6 +41,7 @@ export function ShowHero({ show, onPlay, hasResume }: ShowHeroProps) {
     () => (show.videoLink ? getYouTubeId(show.videoLink) : null),
     [show.videoLink]
   );
+
   const [phase, setPhase] = useState<VideoPhase>(
     videoId ? 'preload' : 'finished'
   );
@@ -53,39 +50,22 @@ export function ShowHero({ show, onPlay, hasResume }: ShowHeroProps) {
     if (!videoId) return;
 
     if (phase === 'preload') {
-      const playTimer = setTimeout(() => {
-        setPhase('playing');
-      }, 6000); // 6-second preload
-
+      const playTimer = setTimeout(() => setPhase('playing'), 6000);
       return () => clearTimeout(playTimer);
     }
 
     if (phase === 'playing') {
-      const finishTimer = setTimeout(() => {
-        setPhase('finished');
-      }, 20000); // 20-second video play
-
+      const finishTimer = setTimeout(() => setPhase('finished'), 20000);
       return () => clearTimeout(finishTimer);
     }
   }, [phase, videoId]);
 
-  const mediaItem: MediaItem = {
-    id: show.tmdbShowId || 0,
-    title: show.title,
-    overview: show.overview,
-    poster_path: show.posterUrl || '',
-    backdrop_path: show.backdropUrl || '',
-    release_date: show.firstAirDate || '',
-    vote_average: show.voteAverage || 0,
-    genres: show.genres || [],
-    media_type: 'tv',
-  };
-
-  const primaryCtaLabel = hasResume ? 'Resume' : 'Play';
+  const bg = show.backdropUrl || show.posterUrl || '';
+  const buttonLabel = hasResume ? 'Resume' : 'Watch Now';
 
   return (
-    <div className="relative aspect-video w-full rounded-xl overflow-hidden">
-      {/* Background Media */}
+    <div className="relative w-full overflow-hidden rounded-xl aspect-[4/5] sm:aspect-video">
+      {/* Background media: trailer video + fallback image (hero-style) */}
       <div className="absolute inset-0 bg-black">
         {videoId && (
           <iframe
@@ -94,62 +74,80 @@ export function ShowHero({ show, onPlay, hasResume }: ShowHeroProps) {
             allow="autoplay; encrypted-media"
             allowFullScreen
             className={cn(
-              'absolute inset-0 w-full h-full object-cover transition-opacity duration-1000',
+              'absolute inset-0 h-full w-full object-cover transition-opacity duration-1000',
+              // zoomed-in trailer background
+              'scale-[2]',
               phase === 'playing'
                 ? 'opacity-100'
                 : 'opacity-0 pointer-events-none'
             )}
           />
         )}
-        {show.backdropUrl && (
+
+        {bg && (
           <Image
-            src={show.backdropUrl}
+            src={bg}
             alt={show.title}
             fill
+            priority
             className={cn(
               'object-cover transition-opacity duration-1000',
+              // zoom on mobile, normal on larger screens
+              'scale-[1.12] sm:scale-100',
               phase === 'playing' ? 'opacity-0' : 'opacity-100'
             )}
-            priority
           />
         )}
       </div>
 
-      {/* Gradient Overlays */}
-      <div className="absolute inset-0 bg-gradient-to-t from-background/80 via-background/50 to-transparent" />
-      <div className="absolute inset-0 bg-gradient-to-r from-black/80 via-black/40 to-transparent" />
+      {/* Gradient overlay (match featured row) */}
+      <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/50 to-transparent" />
 
-      {/* Content */}
-      <div className="absolute inset-0 flex items-center p-8">
-        <div className="w-full max-w-md md:max-w-lg lg:max-w-xl space-y-4">
-          <h1 className="font-headline text-3xl sm:text-4xl md:text-5xl lg:text-6xl font-bold text-foreground drop-shadow-2xl">
+      {/* Content – bottom/center on mobile, left-aligned on larger screens */}
+      <div className="absolute inset-0 flex items-end justify-center px-4 py-6 sm:items-center sm:justify-start sm:p-8">
+        <div className="w-full max-w-md md:max-w-lg lg:max-w-xl space-y-3 sm:space-y-4 text-center sm:text-left">
+          <h1 className="font-headline text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-bold text-white drop-shadow-2xl">
             {show.title}
           </h1>
-          <p className="line-clamp-1 sm:line-clamp-3 md:line-clamp-none text-sm sm:text-base text-foreground/80 leading-relaxed drop-shadow-lg">
-            {show.overview}
-          </p>
-          <div className="hidden sm:flex flex-wrap items-center gap-2">
-            {(show.genres || []).map((genre) => (
-              <Badge key={genre} variant="secondary">
-                {genre}
-              </Badge>
-            ))}
-          </div>
-          <div className="flex items-center gap-2">
-            <Button
-              size="lg"
-              className="font-bold"
-              onClick={onPlay}
-              disabled={!onPlay}
-            >
-              <Play className="mr-2" />
-              {primaryCtaLabel}
-            </Button>
-            <WatchlistButton
-              item={mediaItem}
-              variant="secondary"
-              className="font-bold"
-            />
+
+          {show.overview && (
+            <p className="line-clamp-2 sm:line-clamp-3 text-sm sm:text-base text-white/80 leading-relaxed drop-shadow-lg">
+              {show.overview}
+            </p>
+          )}
+
+          {show.genres && show.genres.length > 0 && (
+            <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-xs sm:text-sm font-semibold text-white sm:justify-start">
+              {show.genres.slice(0, 4).map((genre, idx) => (
+                <span key={genre} className="flex items-center gap-1">
+                  {idx > 0 && (
+                    <span className="opacity-75" aria-hidden="true">
+                      •
+                    </span>
+                  )}
+                  <span className="opacity-90">{genre}</span>
+                </span>
+              ))}
+            </div>
+          )}
+
+          <div className="flex items-center justify-center gap-2 pt-2 sm:justify-start">
+            {onPlay && (
+              <button
+                type="button"
+                onClick={() => onPlay()}
+                className={cn(
+                  'inline-flex h-11 items-center justify-center rounded-full px-4 text-sm font-bold shadow-lg transition-opacity',
+                  // 55% width on mobile, capped on larger screens
+                  'w-[55%] sm:w-[55%] max-w-xs mx-auto sm:mx-0',
+                  // Apple TV–style colors
+                  'bg-[#f5f5f5] text-[#2f4f4f]'
+                )}
+              >
+                {buttonLabel}
+              </button>
+            )}
+            {/* No Watchlist button here to match the featured layout */}
           </div>
         </div>
       </div>

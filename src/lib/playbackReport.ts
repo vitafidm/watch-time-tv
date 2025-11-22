@@ -1,5 +1,7 @@
 // src/lib/playbackReport.ts
 import { getAuth } from "firebase/auth";
+import { doc, deleteDoc } from "firebase/firestore";
+import { db } from "@/lib/firebase.client";
 
 const RAW_BASE =
   process.env.NEXT_PUBLIC_FUNCTIONS_BASE_URL ||
@@ -39,4 +41,20 @@ export async function postPlaybackReport(payload: Payload): Promise<void> {
     const txt = await res.text().catch(() => "");
     throw new Error(txt || `playbackReport HTTP ${res.status}`);
   }
+}
+
+/**
+ * Hard "mark as watched":
+ * Deletes the playback doc at users/{uid}/playback/{mediaId}.
+ * This will drop the item from Continue Watching (and clear progress bars).
+ */
+export async function markPlaybackFinished(
+  mediaId: string | number
+): Promise<void> {
+  const auth = getAuth();
+  const user = auth.currentUser;
+  if (!user) throw new Error("Not signed in");
+
+  const ref = doc(db, "users", user.uid, "playback", String(mediaId));
+  await deleteDoc(ref);
 }
