@@ -12,6 +12,8 @@ import { PlayerDialog } from '@/components/PlayerDialog';
 import { CastSection } from '@/components/CastSection';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/hooks/use-toast';
+import { ExtraVideosSections } from "@/components/ExtraVideosSections";
+
 
 type MovieDoc = {
   type?: string; // "movie"
@@ -29,6 +31,8 @@ type MovieDoc = {
   voteAverage?: number;
   cast?: Array<{ name: string; character?: string; profileUrl?: string | null }>;
   videoLink?: string | null; // optional trailer link (YouTube, etc.)
+  logoUrl?: string | null;   // logo for hero
+  extraVideos?: any[] | null;
 };
 
 function normalizeGenres(raw: any): string[] {
@@ -258,6 +262,8 @@ export default function MovieDetailPage({
 
   const playbackMediaId = movie.mediaId ?? id;
 
+  const logo = (movie as any).logoUrl as string | undefined; // 🔹 used in hero
+
   return (
     <div className="container space-y-10" data-testid="movie-detail">
       {/* Hero – Apple TV–style, matches Horizontal Posters - Featured / ShowHero */}
@@ -300,18 +306,29 @@ export default function MovieDetailPage({
         </div>
 
         {/* Gradient overlay (left-right, no top-to-bottom wash) */}
-        <div className="absolute inset-0 bg-gradient-to-r from-black/80 via-black/40 to-transparent" />
+        <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/50 to-transparent" />
 
         {/* Content: bottom/center on mobile, left-aligned on larger screens */}
         <div className="absolute inset-0 flex items-end justify-center px-4 py-6 sm:items-center sm:justify-start sm:p-8">
           <div className="w-full max-w-md md:max-w-lg lg:max-w-xl space-y-3 sm:space-y-4 text-center sm:text-left">
-            <h1 className="font-headline text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-bold text-white drop-shadow-2xl">
-              {title}
-              {year ? (
-                <span className="ml-2 text-white/70 text-lg sm:text-2xl">
-                  ({year})
-                </span>
-              ) : null}
+            {/* 🔹 Logo + title fallback + year */}
+            <h1 className="font-headline text-white drop-shadow-2xl flex flex-col items-center sm:items-start gap-2">
+              <div className="relative mx-auto sm:mx-0 h-16 sm:h-20 md:h-[11rem] w-full max-w-xs sm:max-w-sm md:max-w-md flex items-center justify-center sm:justify-start">
+                {logo ? (
+                  <Image
+                    src={logo}
+                    alt={title}
+                    fill
+                    className="object-contain object-center sm:object-[left_bottom]"
+                    priority
+                  />
+                ) : (
+                  <span className="text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-bold leading-tight">
+                    {title}
+                  </span>
+                )}
+              </div>
+              
             </h1>
 
             {overview && (
@@ -369,7 +386,8 @@ export default function MovieDetailPage({
         )}
       </div>
 
-      {/* Watch now */}
+{/*
+     
       <section>
         <h2 className="mb-3 font-headline text-xl font-semibold">Watch now</h2>
         <button
@@ -399,7 +417,7 @@ export default function MovieDetailPage({
             </div>
           )}
 
-          {/* Mark as watched pill (top-right) */}
+          
           {hasResume && (
             <div
               role="button"
@@ -431,7 +449,7 @@ export default function MovieDetailPage({
             </div>
           )}
 
-          {/* Center overlay: Play / Resume */}
+          
           <div
             className={cn(
               'pointer-events-none absolute inset-0 grid place-items-center opacity-0',
@@ -446,7 +464,7 @@ export default function MovieDetailPage({
             </span>
           </div>
 
-          {/* Bottom progress bar on card */}
+          
           {progressPct > 0 && progressPct < 100 && (
             <div className="absolute inset-x-0 bottom-0 h-1.5 bg-black/30">
               <div
@@ -458,6 +476,17 @@ export default function MovieDetailPage({
           )}
         </button>
       </section>
+
+      <div className="pb-[5px]">
+         <hr className="border-border" />
+      </div>
+*/}
+
+      <ExtraVideosSections videos={(movie as any).extraVideos} />
+
+      <div className="pb-[5px]">
+         <hr className="border-border" />
+      </div>
 
       {Array.isArray(movie.cast) && movie.cast.length > 0 && (
         <CastSection cast={movie.cast} />

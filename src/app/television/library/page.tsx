@@ -4,33 +4,54 @@ import { useAuthUser } from "@/hooks/useAuthUser";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tv, RefreshCw, Play, Check } from "lucide-react";
-import type { MediaDoc } from "@/lib/db.types";
-import { useMemo, useRef, useState, useEffect, useCallback } from "react";
+import { useMemo, useState, useEffect, useCallback } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { useInfiniteFirestore } from "@/hooks/useInfiniteFirestore";
-import { MediaEditButton } from "@/components/MediaEditButton";
-import { MediaEditModal, type MediaEditModalItem } from "@/components/MediaEditModal";
+import {
+  MediaEditModal,
+  type MediaEditModalItem,
+} from "@/components/MediaEditModal";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { callFunction } from "@/lib/api";
 import { useRouter } from "next/navigation";
 import { usePlaybackProgress } from "@/hooks/usePlaybackProgress";
 import { db } from "@/lib/firebase";
-import { doc, deleteDoc } from "firebase/firestore";
+import {
+  collection,
+  getDocs,
+  query,
+  where,
+  doc,
+  deleteDoc,
+} from "firebase/firestore";
 
 // Represents a document from the /users/{uid}/shows collection
 type ShowDoc = {
   id: string;
-  tmdbShowId: number;
+  tmdbShowId?: number | null;
   title: string;
   displayTitle?: string;
-  posterUrl?: string;
-  backdropUrl?: string;
-  videoLink?: string;
+  posterUrl?: string | null;
+  backdropUrl?: string | null;
+  videoLink?: string | null;
+  logoUrl?: string | null;
   episodeCount?: number;
   updatedAt: any; // Firestore Timestamp
 };
+
+/* -----------------------------------------------------------------------------
+ * Simple in-memory cache for TV library (per uid)
+ * -------------------------------------------------------------------------- */
+
+type ShowsCache = {
+  uid: string;
+  shows: ShowDoc[];
+  ts: number;
+};
+
+let showsCache: ShowsCache | null = null;
+const SHOWS_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
 // --- Show Card -------------------------------------------------------------
 
@@ -72,7 +93,10 @@ function ShowCard({
       <div className="flex flex-col gap-2">
         <div className="relative aspect-[2/3] w-full overflow-hidden rounded-lg shadow-lg transition-all duration-300 bg-muted">
           <Image
-            src={item.posterUrl || `https://picsum.photos/500/750?random=${item.id}`}
+            src={
+              item.posterUrl ||
+              `https://picsum.photos/500/750?random=${item.id}`
+            }
             alt={displayTitle}
             width={500}
             height={750}
@@ -142,12 +166,18 @@ function ShowCard({
                 router.push(`/television/${item.id}`);
               }}
               className="pointer-events-auto inline-flex items-center justify-center h-14 rounded-full bg-background/60 px-5 text-foreground/90 shadow-lg ring-1 ring-border/50 transition hover:bg-background/80 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ring-offset-background"
-              aria-label={`${hasResume ? "Open show to resume" : "Open"} ${displayTitle}`}
+              aria-label={`${
+                hasResume ? "Open show to resume" : "Open"
+              } ${displayTitle}`}
             >
               <Play className="h-5 w-5 mr-2" aria-hidden="true" />
               <span className="text-sm font-bold">
                 {hasResume
-                  ? `Resume${resumeSeconds ? ` • ${formatTimeShort(resumeSeconds)}` : ""}`
+                  ? `Resume${
+                      resumeSeconds
+                        ? ` • ${formatTimeShort(resumeSeconds)}`
+                        : ""
+                    }`
                   : "Open"}
               </span>
             </button>
@@ -171,7 +201,8 @@ function ShowCard({
           </h3>
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <span>
-              {item.episodeCount || 0} {item.episodeCount === 1 ? "episode" : "episodes"}
+              {item.episodeCount || 0}{" "}
+              {item.episodeCount === 1 ? "episode" : "episodes"}
             </span>
           </div>
         </div>
@@ -186,55 +217,152 @@ function TvLibrary() {
   const { user } = useAuthUser();
   const { toast } = useToast();
   const [isRefreshing, setIsRefreshing] = useState(false);
-
-  const {
-    items: fetchedShows,
-    loading,
-    hasMore,
-    attachSentinel,
-    resetAndFetch,
-    isFetchingNext,
-    placeholderCount,
-  } = useInfiniteFirestore<ShowDoc>({
-    collectionPath: user ? `users/${user.uid}/shows` : undefined,
-    where: [["episodeCount", ">", 0]],
-    orderBy: ["updatedAt", "desc"],
-    pageSize: 24,
-    overscanPx: 1200, // start loading well before the gap
-    minRemaining: 6, // tail skeletons
-    map: (doc) => ({ id: doc.id, ...doc.data(), tmdbShowId: Number(doc.id) } as ShowDoc),
-  });
-
   const [shows, setShows] = useState<ShowDoc[]>([]);
-  useEffect(() => {
-    setShows(fetchedShows);
-  }, [fetchedShows]);
+  const [loading, setLoading] = useState(false);
 
-  const [editingItem, setEditingItem] = useState<MediaEditModalItem | null>(null);
+  const uid = user?.uid ?? null;
+
+  // 🔹 Fetch all shows once (episodeCount > 0), with simple in-memory cache
+  const fetchShows = useCallback(
+    async (opts?: { forceNetwork?: boolean }) => {
+      if (!uid) return;
+      const forceNetwork = opts?.forceNetwork ?? false;
+
+      const now = Date.now();
+
+      // ✅ Serve from cache if fresh & not forced
+      if (
+        !forceNetwork &&
+        showsCache &&
+        showsCache.uid === uid &&
+        now - showsCache.ts < SHOWS_CACHE_TTL_MS
+      ) {
+        setShows(showsCache.shows);
+        setLoading(false);
+        return;
+      }
+
+      setLoading(true);
+      try {
+        const q = query(
+          collection(db, "users", uid, "shows"),
+          where("episodeCount", ">", 0)
+        );
+
+        const snap = await getDocs(q);
+
+        const all: ShowDoc[] = snap.docs.map((docSnap) => {
+          const data = docSnap.data() as any;
+          return {
+            id: docSnap.id,
+            tmdbShowId:
+              typeof data.tmdbShowId === "number"
+                ? data.tmdbShowId
+                : Number(docSnap.id) || undefined,
+            title: data.title ?? data.name ?? "Untitled",
+            displayTitle: data.displayTitle,
+            posterUrl: data.posterUrl ?? null,
+            backdropUrl: data.backdropUrl ?? null,
+            videoLink: data.videoLink ?? null,
+            logoUrl: data.logoUrl ?? null,
+            episodeCount: data.episodeCount,
+            updatedAt: data.updatedAt,
+          };
+        });
+
+        // ✅ In-memory A→Z sort by displayTitle || title (case-insensitive)
+        all.sort((a, b) => {
+          const nameA = (a.displayTitle || a.title || "").toLocaleLowerCase();
+          const nameB = (b.displayTitle || b.title || "").toLocaleLowerCase();
+          return nameA.localeCompare(nameB, undefined, { sensitivity: "base" });
+        });
+
+        setShows(all);
+
+        // 🔒 Update cache
+        showsCache = {
+          uid,
+          shows: all,
+          ts: Date.now(),
+        };
+      } catch (error) {
+        console.error("Failed to load TV library:", error);
+        toast({
+          title: "Failed to load TV library",
+          description:
+            error instanceof Error ? error.message : "Unknown error occurred",
+          variant: "destructive",
+        });
+      } finally {
+        setLoading(false);
+      }
+    },
+    [uid, toast]
+  );
+
+  // Initial load
+  useEffect(() => {
+    void fetchShows();
+  }, [fetchShows]);
+
+  const [editingItem, setEditingItem] = useState<MediaEditModalItem | null>(
+    null
+  );
 
   const handleEdit = (show: ShowDoc) => {
     if (!user) return;
+
+    const tmdbId =
+      typeof show.tmdbShowId === "number" && Number.isFinite(show.tmdbShowId)
+        ? show.tmdbShowId
+        : undefined;
+
+    const displayTitle = show.displayTitle || show.title;
+    const logoUrl = show.logoUrl ?? null;
+    const videoLink = show.videoLink ?? null;
+
     setEditingItem({
-      id: String(show.id), // Doc ID is the show doc id
+      id: String(show.id), // show doc id (folder-based)
       collectionPath: `users/${user.uid}/shows`,
       kind: "show",
       current: {
+        // Titles
         title: show.title,
-        displayTitle: show.displayTitle,
-        tmdbId: show.tmdbShowId,
-        posterUrl: show.posterUrl,
-        backdropUrl: show.backdropUrl,
-        videoLink: show.videoLink,
+        displayTitle,
+        normalizedTitle: displayTitle,
+        // TMDB match
+        tmdbId,
+        // Artwork
+        posterUrl: show.posterUrl ?? null,
+        backdropUrl: show.backdropUrl ?? null,
+        logoUrl,
+        // Trailer
+        videoLink,
       },
     });
   };
 
-  const handleApplied = useCallback((id: string, patch: Partial<ShowDoc>) => {
-    setShows((prev) => prev.map((s) => (String(s.id) === id ? { ...s, ...patch } : s)));
-  }, []);
+  const handleApplied = useCallback(
+    (id: string, patch: Partial<ShowDoc>) => {
+      setShows((prev) => {
+        const next = prev.map((s) =>
+          String(s.id) === id ? { ...s, ...patch } : s
+        );
 
-  const sentinelRef = useRef<HTMLDivElement | null>(null);
-  attachSentinel(sentinelRef.current);
+        // keep cache in sync if it's for this uid
+        if (uid && showsCache?.uid === uid) {
+          showsCache = {
+            uid,
+            shows: next,
+            ts: showsCache.ts,
+          };
+        }
+
+        return next;
+      });
+    },
+    [uid]
+  );
 
   const showInitialLoading = loading && shows.length === 0;
 
@@ -244,11 +372,14 @@ function TvLibrary() {
     setIsRefreshing(true);
     try {
       const idToken = await user.getIdToken();
-      await callFunction("materializeUserShowsFromFolders", { uid: user.uid }, idToken);
+      await callFunction(
+        "materializeUserShowsFromFolders",
+        { uid: user.uid },
+        idToken
+      );
 
-      if (resetAndFetch) {
-        await resetAndFetch();
-      }
+      // Re-fetch full, sorted catalog after materialization, bypassing cache
+      await fetchShows({ forceNetwork: true });
 
       toast({ title: "Library refreshed" });
     } catch (error: any) {
@@ -264,8 +395,6 @@ function TvLibrary() {
   };
 
   // --- Show-level playback progress + mark-as-watched ---------------------
-
-  const uid = user?.uid ?? null;
 
   const progressIds = useMemo(
     () => (uid ? shows.map((s) => String(s.id)) : []),
@@ -303,10 +432,16 @@ function TvLibrary() {
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div className="flex items-center gap-4">
           <Tv className="h-8 w-8 text-primary" />
-          <h1 className="font-headline text-4xl font-bold tracking-tight">TV Library</h1>
+          <h1 className="font-headline text-4xl font-bold tracking-tight">
+            TV Library
+          </h1>
         </div>
         <Button onClick={handleRefresh} disabled={isRefreshing || loading}>
-          <RefreshCw className={`mr-2 h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`} />
+          <RefreshCw
+            className={`mr-2 h-4 w-4 ${
+              isRefreshing ? "animate-spin" : ""
+            }`}
+          />
           {isRefreshing ? "Refreshing..." : "Refresh"}
         </Button>
       </div>
@@ -341,36 +476,28 @@ function TvLibrary() {
                 progressPercent={progressPercent}
                 resumeSeconds={resumeSeconds}
                 onMarkWatched={
-                  resumeSeconds !== null ? () => handleMarkWatched(item) : undefined
+                  resumeSeconds !== null
+                    ? () => handleMarkWatched(item)
+                    : undefined
                 }
               />
             );
           })}
-
-          {/* Tail placeholders for smoothness */}
-          {hasMore &&
-            Array.from({ length: placeholderCount }).map((_, i) => (
-              <div key={`ph-${i}`} className="space-y-2">
-                <Skeleton className="aspect-[2/3] w-full rounded-lg" />
-                <Skeleton className="h-5 w-5/6" />
-                <Skeleton className="h-4 w-1/3" />
-              </div>
-            ))}
         </div>
       )}
 
       {!loading && shows.length === 0 && (
         <div className="flex flex-col items-center justify-center text-center border-2 border-dashed border-muted rounded-lg py-20">
           <Tv className="h-16 w-16 text-muted-foreground" />
-          <h2 className="mt-6 text-2xl font-headline text-foreground">No TV Shows Found</h2>
+          <h2 className="mt-6 text-2xl font-headline text-foreground">
+            No TV Shows Found
+          </h2>
           <p className="mt-2 text-muted-foreground">
-            Your TV library is empty. Connect an agent to add media or run the materializer
-            function.
+            Your TV library is empty. Connect an agent to add media or run the
+            materializer function.
           </p>
         </div>
       )}
-
-      {hasMore && <div ref={sentinelRef} className="h-10 w-full" />}
 
       <MediaEditModal
         open={!!editingItem}

@@ -33,9 +33,20 @@ export default functions.https.onRequest((req, res) => {
         throw new functions.https.HttpsError('unauthenticated', 'User must be authenticated.');
       }
 
-      const { collection, docId, posterUrl, backdropUrl, videoLink } = req.body || {};
+      const {
+        collection,
+        docId,
+        posterUrl,
+        backdropUrl,
+        videoLink,
+        logoUrl,             // NEW
+      } = req.body || {};
+
       if (!collection || !docId) {
-        throw new functions.https.HttpsError('invalid-argument', 'Missing required fields: collection and docId.');
+        throw new functions.https.HttpsError(
+          'invalid-argument',
+          'Missing required fields: collection and docId.'
+        );
       }
 
       const docRef = db.doc(`${collection}/${docId}`);
@@ -57,6 +68,11 @@ export default functions.https.onRequest((req, res) => {
         updatePayload.videoLink = videoLink;
         updatePayload.videoLocked = true;
         lockedFields.push('videoLink');
+      }
+      if (typeof logoUrl === 'string' && logoUrl.length) {
+        updatePayload.logoUrl = logoUrl;
+        updatePayload.logoLocked = true;
+        lockedFields.push('logoUrl');
       }
 
       if (Object.keys(updatePayload).length === 0) {

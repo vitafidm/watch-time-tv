@@ -24,6 +24,7 @@ export type HeroData = {
   releaseDate?: string;
   voteAverage?: number;
   genres?: string[];
+  logoUrl?: string | null; // NEW: hero logo (TMDB logoUrl from media doc)
 };
 
 type VideoPhase = 'preload' | 'playing' | 'finished';
@@ -123,17 +124,40 @@ export function HomepageHero({ item, onPlay }: HomepageHeroProps) {
       {/* Content */}
       <div className="absolute inset-0 flex items-center p-8">
         <div className="w-full max-w-md md:max-w-lg lg:max-w-xl space-y-4">
-          {/* Title → only a Link if we have a detailHref */}
+          {/* Title / Logo → prefer logo, fall back to text */}
           {detailHref ? (
             <Link
               href={detailHref}
               prefetch={false}
               className="group/headline inline-block"
             >
-              <h1 className="font-headline text-3xl sm:text-4xl md:text-5xl lg:text-6xl font-bold text-foreground drop-shadow-2xl group-hover/headline:text-foreground/90 transition-colors">
-                {item.title}
-              </h1>
+              {item.logoUrl ? (
+                <div className="relative w-full max-w-xs sm:max-w-sm md:max-w-md h-16 sm:h-20 md:h-24">
+                  <Image
+                    src={item.logoUrl}
+                    alt={item.title}
+                    fill
+                    className="object-contain drop-shadow-2xl"
+                  />
+                  {/* Accessible text title for screen readers */}
+                  <span className="sr-only">{item.title}</span>
+                </div>
+              ) : (
+                <h1 className="font-headline text-3xl sm:text-4xl md:text-5xl lg:text-6xl font-bold text-foreground drop-shadow-2xl group-hover/headline:text-foreground/90 transition-colors">
+                  {item.title}
+                </h1>
+              )}
             </Link>
+          ) : item.logoUrl ? (
+            <div className="relative w-full max-w-xs sm:max-w-sm md:max-w-md h-16 sm:h-20 md:h-24">
+              <Image
+                src={item.logoUrl}
+                alt={item.title}
+                fill
+                className="object-contain drop-shadow-2xl"
+              />
+              <span className="sr-only">{item.title}</span>
+            </div>
           ) : (
             <h1 className="font-headline text-3xl sm:text-4xl md:text-5xl lg:text-6xl font-bold text-foreground drop-shadow-2xl">
               {item.title}
@@ -181,3 +205,5 @@ export function HomepageHero({ item, onPlay }: HomepageHeroProps) {
     </div>
   );
 }
+
+export default HomepageHero;

@@ -1,3 +1,4 @@
+// src/materializeUserShows.ts
 import * as functions from "firebase-functions";
 import cors from "cors";
 import * as admin from "firebase-admin";
@@ -17,6 +18,9 @@ type ShowDoc = {
   posterLocked?: boolean;
   backdropLocked?: boolean;
   videoLink?: string | null;
+  logoUrl?: string | null;
+  logoLocked?: boolean;
+  extraVideos?: any[] | null; // ✅ NEW: normalized TMDB videos for this show
   episodeCount: number;
   lastAddedAt?: FirebaseFirestore.Timestamp;
   updatedAt: FirebaseFirestore.Timestamp;
@@ -36,7 +40,6 @@ function idFromShowRef(showRef?: unknown): number | null {
   const m = showRef.match(/(?:^|\/)shows\/(\d+)/);
   return m ? Number(m[1]) : null;
 }
-
 
 // count episodes for a given show id using showRef equality
 async function countEpisodesForShow(
@@ -172,16 +175,26 @@ const handler = async (req: functions.https.Request, res: functions.Response) =>
           genres: cache?.genres ?? existingData.genres,
           posterUrl: cache?.posterUrl ?? existingData.posterUrl ?? null,
           backdropUrl: cache?.backdropUrl ?? existingData.backdropUrl ?? null,
+          logoUrl: cache?.logoUrl ?? existingData.logoUrl ?? null, // ✅ from cache when not locked
+          extraVideos:
+            (cache as any)?.extraVideos ??
+            existingData.extraVideos ??
+            null, // ✅ propagate show-level extras if present
           episodeCount,
         };
 
         // Respect user overrides/locks
         if (existingData.posterLocked) delete base.posterUrl;
         if (existingData.backdropLocked) delete base.backdropUrl;
+        if (existingData.logoLocked) delete base.logoUrl;
         if (existingData.displayTitle) delete base.title;
 
         const updates: FirebaseFirestore.UpdateData<ShowDoc> = {
           ...base,
+          // Ensure locks are always present (do not clobber true → false)
+          posterLocked: existingData.posterLocked ?? false,
+          backdropLocked: existingData.backdropLocked ?? false,
+          logoLocked: existingData.logoLocked ?? false, // ✅ initialize lock if missing
           lastAddedAt:
             (lastAddedAt as any) ?? admin.firestore.FieldValue.serverTimestamp(),
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),

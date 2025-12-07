@@ -1,3 +1,4 @@
+// src/materializeUserShowsFromFolders
 import * as functions from "firebase-functions";
 import * as admin from "firebase-admin";
 import cors from "cors";
@@ -159,7 +160,10 @@ export default functions
               folderPath: showData.folderPath || bucket.exampleShowFolderPath || null,
               serverId: showData.serverId || bucket.serverId || null,
               episodeCount: showData.episodeCount || 0,
-              lastAddedAt: bucket.lastAddedAt || showData.lastAddedAt || admin.firestore.FieldValue.serverTimestamp(),
+              lastAddedAt:
+                bucket.lastAddedAt ||
+                showData.lastAddedAt ||
+                admin.firestore.FieldValue.serverTimestamp(),
 
               // TMDB-derived placeholders (initialize once)
               tmdbShowId: showData.tmdbShowId ?? null,
@@ -171,6 +175,9 @@ export default functions
               posterUrl: showData.posterUrl ?? null,
               backdropUrl: showData.backdropUrl ?? null,
               cast: showData.cast ?? [],
+              logoUrl: showData.logoUrl ?? null,
+              logoLocked: showData.logoLocked ?? false,
+              extraVideos: showData.extraVideos ?? null, // ✅ ensure field exists, default null
 
               // Metadata
               matchStatus: showData.matchStatus || "pending",
@@ -191,9 +198,14 @@ export default functions
               const ep = epDoc.data() || {};
               const existingRef = typeof ep.showRef === "string" ? ep.showRef : null;
               const existingTitle = typeof ep.showTitle === "string" ? ep.showTitle : null;
-              const needsWrite = existingRef !== showRefPath || existingTitle !== bucket.folderName;
+              const needsWrite =
+                existingRef !== showRefPath || existingTitle !== bucket.folderName;
               if (needsWrite) {
-                batch.set(epDoc.ref, { showRef: showRefPath, showTitle: bucket.folderName }, { merge: true });
+                batch.set(
+                  epDoc.ref,
+                  { showRef: showRefPath, showTitle: bucket.folderName },
+                  { merge: true }
+                );
                 ops++;
               }
               if (ops >= 400) {
@@ -217,7 +229,9 @@ export default functions
             await db.doc(showRefPath).set(
               {
                 episodeCount: countSnap.size,
-                lastAddedAt: bucket.lastAddedAt || admin.firestore.FieldValue.serverTimestamp(),
+                lastAddedAt:
+                  bucket.lastAddedAt ||
+                  admin.firestore.FieldValue.serverTimestamp(),
                 updatedAt: admin.firestore.FieldValue.serverTimestamp(),
               },
               { merge: true }
@@ -254,7 +268,9 @@ export default functions
         });
       } catch (e: any) {
         functions.logger.error("materializeUserShowsFromFolders fatal", e);
-        return res.status(500).json({ error: { status: "INTERNAL", message: e?.message || "Internal error" } });
+        return res.status(500).json({
+          error: { status: "INTERNAL", message: e?.message || "Internal error" },
+        });
       }
     });
   });

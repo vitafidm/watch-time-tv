@@ -36,6 +36,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+// src/materializeUserShowsFromFolders
 const functions = __importStar(require("firebase-functions"));
 const admin = __importStar(require("firebase-admin"));
 const cors_1 = __importDefault(require("cors"));
@@ -169,7 +170,9 @@ exports.default = functions
                         folderPath: showData.folderPath || bucket.exampleShowFolderPath || null,
                         serverId: showData.serverId || bucket.serverId || null,
                         episodeCount: showData.episodeCount || 0,
-                        lastAddedAt: bucket.lastAddedAt || showData.lastAddedAt || admin.firestore.FieldValue.serverTimestamp(),
+                        lastAddedAt: bucket.lastAddedAt ||
+                            showData.lastAddedAt ||
+                            admin.firestore.FieldValue.serverTimestamp(),
                         // TMDB-derived placeholders (initialize once)
                         tmdbShowId: showData.tmdbShowId ?? null,
                         tmdbType: showData.tmdbType || "tv",
@@ -180,6 +183,9 @@ exports.default = functions
                         posterUrl: showData.posterUrl ?? null,
                         backdropUrl: showData.backdropUrl ?? null,
                         cast: showData.cast ?? [],
+                        logoUrl: showData.logoUrl ?? null,
+                        logoLocked: showData.logoLocked ?? false,
+                        extraVideos: showData.extraVideos ?? null, // ✅ ensure field exists, default null
                         // Metadata
                         matchStatus: showData.matchStatus || "pending",
                         posterLocked: showData.posterLocked ?? false,
@@ -221,7 +227,8 @@ exports.default = functions
                         .get();
                     await db.doc(showRefPath).set({
                         episodeCount: countSnap.size,
-                        lastAddedAt: bucket.lastAddedAt || admin.firestore.FieldValue.serverTimestamp(),
+                        lastAddedAt: bucket.lastAddedAt ||
+                            admin.firestore.FieldValue.serverTimestamp(),
                         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
                     }, { merge: true });
                     showsRecounted++;
@@ -254,7 +261,9 @@ exports.default = functions
         }
         catch (e) {
             functions.logger.error("materializeUserShowsFromFolders fatal", e);
-            return res.status(500).json({ error: { status: "INTERNAL", message: e?.message || "Internal error" } });
+            return res.status(500).json({
+                error: { status: "INTERNAL", message: e?.message || "Internal error" },
+            });
         }
     });
 });

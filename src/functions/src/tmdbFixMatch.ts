@@ -9,6 +9,74 @@ import { movieDetails, tvDetails, posterUrl, backdropUrl } from "./tmdbClient";
 
 const corsHandler = cors({ origin: true });
 
+/** ---------- Extra videos: normalized shape ---------- **/
+type ExtraVideo = {
+  id: string;
+  key: string;
+  name: string | null;
+  site: string | null;
+  type: string | null;
+  official: boolean;
+  size: number | null;
+};
+
+function normalizeExtraVideos(raw: any[] | undefined): ExtraVideo[] | null {
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+
+  const mapped = raw
+    .map((v: any): ExtraVideo | null => {
+      const key = typeof v?.key === "string" ? v.key : "";
+      const site = typeof v?.site === "string" ? v.site : "";
+      if (!key || !site) return null;
+
+      return {
+        id: String(v.id ?? `${site}:${key}`),
+        key,
+        name: typeof v?.name === "string" ? v.name : null,
+        site,
+        type: typeof v?.type === "string" ? v.type : null,
+        official: Boolean(v?.official),
+        size: typeof v?.size === "number" ? v.size : null,
+      };
+    })
+    .filter(Boolean) as ExtraVideo[];
+
+  return mapped.length ? mapped : null;
+}
+
+/** ---------- Logo helpers ---------- **/
+type TmdbLogo = {
+  file_path?: string | null;
+  iso_639_1?: string | null;
+  vote_average?: number | null;
+  vote_count?: number | null;
+};
+
+function pickBestLogoFromDetails(details: any): string | null {
+  const logos: TmdbLogo[] | undefined = details?.images?.logos;
+  if (!Array.isArray(logos) || logos.length === 0) return null;
+
+  const sorted = [...logos].sort(
+    (a, b) => (b.vote_count ?? 0) - (a.vote_count ?? 0)
+  );
+
+  const preferredLangs: (string | null)[] = [
+    details?.original_language ?? null,
+    "en",
+  ];
+
+  for (const lang of preferredLangs) {
+    if (!lang) continue;
+    const hit = sorted.find((l) => l.iso_639_1 === lang && l.file_path);
+    if (hit?.file_path) {
+      return backdropUrl(hit.file_path, "original");
+    }
+  }
+
+  const first = sorted.find((l) => l.file_path);
+  return first?.file_path ? backdropUrl(first.file_path, "original") : null;
+}
+
 /** ---------- Helpers to resolve canonical show doc ---------- **/
 function normalizeTitle(raw: string): string {
   return (raw || "")
@@ -71,6 +139,7 @@ function mergeShowWithLocks(existing: any, incoming: any) {
   if (existing?.posterLocked) merged.posterUrl = existing.posterUrl;
   if (existing?.backdropLocked) merged.backdropUrl = existing.backdropUrl;
   if (existing?.videoLocked) merged.videoLink = existing.videoLink;
+  if (existing?.logoLocked) merged.logoUrl = existing.logoUrl;
 
   return merged;
 }
@@ -95,6 +164,11 @@ async function handleMovieFix(
     );
   }
 
+  const extraVideos =
+    normalizeExtraVideos(details.videos?.results) ??
+    (existing.extraVideos ?? null);
+  const logoUrlFromTmdb = pickBestLogoFromDetails(details) ?? existing.logoUrl ?? null;
+
   const incoming: Record<string, any> = {
     tmdbId: details.id,
     tmdbType: "movie",
@@ -110,6 +184,8 @@ async function handleMovieFix(
     posterUrl: posterUrl(details.poster_path, "w500"),
     backdropUrl: backdropUrl(details.backdrop_path, "original"),
     videoLink: pickYouTubeTrailer(details.videos?.results),
+    logoUrl: logoUrlFromTmdb,
+    extraVideos,
   };
 
   if (includeCast) {
@@ -221,6 +297,12 @@ async function handleTVEpisodeFix(
   const showSnap = await targetShowRef.get();
   const existingShow = showSnap.exists ? showSnap.data() || {} : {};
 
+  const extraVideos =
+    normalizeExtraVideos(showDetails.videos?.results) ??
+    (existingShow.extraVideos ?? null);
+  const logoUrlFromTmdb =
+    pickBestLogoFromDetails(showDetails) ?? existingShow.logoUrl ?? null;
+
   const incomingShow: Record<string, any> = {
     tmdbShowId: showDetails.id, // store ID as field, not doc id
     tmdbType: "tv",
@@ -233,6 +315,8 @@ async function handleTVEpisodeFix(
     language: showDetails.original_language ?? null,
     posterUrl: posterUrl(showDetails.poster_path, "w500"),
     backdropUrl: backdropUrl(showDetails.backdrop_path, "original"),
+    logoUrl: logoUrlFromTmdb,
+    extraVideos,
   };
 
   if (includeCast) {
@@ -263,6 +347,7 @@ async function handleTVEpisodeFix(
   };
   if (!ep?.posterLocked) episodeUpdate.posterUrl = mergedShow.posterUrl ?? null;
   if (!ep?.backdropLocked) episodeUpdate.backdropUrl = mergedShow.backdropUrl ?? null;
+  // (We keep logoUrl/extraVideos show-level; episode docs can read via showRef.)
 
   await episodeRef.set(episodeUpdate, { merge: true });
 

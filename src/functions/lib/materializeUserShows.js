@@ -36,6 +36,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+// src/materializeUserShows.ts
 const functions = __importStar(require("firebase-functions"));
 const cors_1 = __importDefault(require("cors"));
 const admin = __importStar(require("firebase-admin"));
@@ -162,6 +163,10 @@ const handler = async (req, res) => {
                     genres: cache?.genres ?? existingData.genres,
                     posterUrl: cache?.posterUrl ?? existingData.posterUrl ?? null,
                     backdropUrl: cache?.backdropUrl ?? existingData.backdropUrl ?? null,
+                    logoUrl: cache?.logoUrl ?? existingData.logoUrl ?? null, // ✅ from cache when not locked
+                    extraVideos: cache?.extraVideos ??
+                        existingData.extraVideos ??
+                        null, // ✅ propagate show-level extras if present
                     episodeCount,
                 };
                 // Respect user overrides/locks
@@ -169,10 +174,16 @@ const handler = async (req, res) => {
                     delete base.posterUrl;
                 if (existingData.backdropLocked)
                     delete base.backdropUrl;
+                if (existingData.logoLocked)
+                    delete base.logoUrl;
                 if (existingData.displayTitle)
                     delete base.title;
                 const updates = {
                     ...base,
+                    // Ensure locks are always present (do not clobber true → false)
+                    posterLocked: existingData.posterLocked ?? false,
+                    backdropLocked: existingData.backdropLocked ?? false,
+                    logoLocked: existingData.logoLocked ?? false, // ✅ initialize lock if missing
                     lastAddedAt: lastAddedAt ?? admin.firestore.FieldValue.serverTimestamp(),
                     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
                 };

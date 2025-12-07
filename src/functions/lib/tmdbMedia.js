@@ -61,7 +61,9 @@ exports.default = functions.https.onRequest(async (req, res) => {
             }
             if (k !== "movie" && k !== "tv") {
                 functions.logger.error("tmdbMedia: invalid kind", { kind });
-                res.status(400).json({ error: "Invalid kind. Use 'movie' or 'tv'." });
+                res
+                    .status(400)
+                    .json({ error: "Invalid kind. Use 'movie' or 'tv' (or 'show')." });
                 return;
             }
             const apiKey = (functions.config()?.tmdb && functions.config().tmdb.key) ||
@@ -95,19 +97,26 @@ exports.default = functions.https.onRequest(async (req, res) => {
                 return;
             }
             const data = await resp.json();
-            // Normalize posters/backdrops using your posterUrl helper.
-            // Sizes allowed by your typing: "w185" | "w500" | "original"
+            // Posters
             const posters = Array.isArray(data?.images?.posters)
                 ? data.images.posters
                     .filter((p) => p?.file_path)
                     .slice(0, 60)
                     .map((p) => ({ url: (0, tmdbClient_1.posterUrl)(p.file_path, "w500") }))
                 : [];
+            // Backdrops
             const backdrops = Array.isArray(data?.images?.backdrops)
                 ? data.images.backdrops
                     .filter((b) => b?.file_path)
                     .slice(0, 60)
                     .map((b) => ({ url: (0, tmdbClient_1.posterUrl)(b.file_path, "original") }))
+                : [];
+            // Logos (new)
+            const logos = Array.isArray(data?.images?.logos)
+                ? data.images.logos
+                    .filter((l) => l?.file_path)
+                    .slice(0, 60)
+                    .map((l) => ({ url: (0, tmdbClient_1.posterUrl)(l.file_path, "original") }))
                 : [];
             // Normalize videos (YouTube trailers)
             const videos = Array.isArray(data?.videos?.results)
@@ -121,7 +130,7 @@ exports.default = functions.https.onRequest(async (req, res) => {
                     thumbnailUrl: `https://i.ytimg.com/vi/${v.key}/hqdefault.jpg`,
                 }))
                 : [];
-            res.json({ posters, backdrops, videos });
+            res.json({ posters, backdrops, videos, logos });
         }
         catch (err) {
             functions.logger.error("tmdbMedia: internal error", {

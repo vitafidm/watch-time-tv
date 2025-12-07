@@ -8,4 +8,7 @@ export type MediaItem = {
   vote_average: number;
   genres: string[];
   media_type: 'movie' | 'tv';
+  logo_path?: string | null;
+  videoLink?: string;
+  tmdbId?: number | null;
 };

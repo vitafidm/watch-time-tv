@@ -48,15 +48,20 @@ const db = admin.firestore();
 const TMDB_BASE = "https://api.themoviedb.org/3";
 const IMG_BASE = "https://image.tmdb.org/t/p/original";
 const EnrichBodySchema = zod_1.z.object({
-    items: zod_1.z.array(zod_1.z.object({
+    items: zod_1.z
+        .array(zod_1.z.object({
         mediaId: zod_1.z.string().min(1),
         type: zod_1.z.enum(["movie", "episode"]),
         title: zod_1.z.string().min(1),
-        year: zod_1.z.number().int().optional()
-    })).min(1).max(50)
+        year: zod_1.z.number().int().optional(),
+    }))
+        .min(1)
+        .max(50),
 });
 function cacheKey(type, title, year) {
-    const base = `${type === "episode" ? "tv" : "movie"}:${title.trim().toLowerCase()}:${year ?? ""}`;
+    const base = `${type === "episode" ? "tv" : "movie"}:${title
+        .trim()
+        .toLowerCase()}:${year ?? ""}`;
     return crypto.createHash("sha1").update(base).digest("hex").slice(0, 40);
 }
 function pickBestImage(path) {
@@ -64,6 +69,81 @@ function pickBestImage(path) {
         return null;
     return `${IMG_BASE}${path}`;
 }
+function pickBestLogoFromDetails(details) {
+    const logos = details?.images?.logos;
+    if (!Array.isArray(logos) || logos.length === 0)
+        return null;
+    const sorted = [...logos].sort((a, b) => (b.vote_count ?? 0) - (a.vote_count ?? 0));
+    const preferredLangs = [
+        details?.original_language || null,
+        "en",
+    ].filter(Boolean);
+    for (const lang of preferredLangs) {
+        const hit = sorted.find((l) => l.iso_639_1 === lang && l.file_path);
+        if (hit?.file_path)
+            return hit.file_path;
+    }
+    const first = sorted.find((l) => !!l.file_path);
+    return first?.file_path ?? null;
+}
+// ---------- Extra videos helpers ----------
+function normalizeVideoKind(rawType) {
+    const t = (rawType || "").toLowerCase();
+    if (t === "trailer")
+        return "trailer";
+    if (t === "teaser")
+        return "teaser";
+    if (t === "clip")
+        return "clip";
+    if (t === "behind the scenes" || t === "behind-the-scenes")
+        return "behind_the_scenes";
+    if (t === "featurette")
+        return "featurette";
+    if (t === "bloopers")
+        return "bloopers";
+    if (t === "opening credits")
+        return "opening_credits";
+    return "other";
+}
+function buildVideoUrl(site, key) {
+    if (!site || !key)
+        return null;
+    if (site === "YouTube")
+        return `https://www.youtube.com/watch?v=${key}`;
+    if (site === "Vimeo")
+        return `https://vimeo.com/${key}`;
+    return null;
+}
+function extractExtraVideos(details) {
+    const raw = details?.videos?.results;
+    if (!Array.isArray(raw) || raw.length === 0)
+        return [];
+    return raw.map((v) => {
+        const id = String(v.id ?? "");
+        const site = v.site ?? null;
+        const key = v.key ?? null;
+        const type = v.type ?? null;
+        const name = v.name ?? null;
+        const official = typeof v.official === "boolean" ? v.official : null;
+        const language = v.iso_639_1 ?? null;
+        const region = v.iso_3166_1 ?? null;
+        const publishedAt = v.published_at ?? null;
+        return {
+            id,
+            site,
+            key,
+            url: buildVideoUrl(site, key),
+            type,
+            kind: normalizeVideoKind(type),
+            name,
+            official,
+            language,
+            region,
+            publishedAt,
+        };
+    });
+}
+// ---------- TMDB calls ----------
 async function tmdbSearch(apiKey, type, title, year) {
     const isTV = type === "episode";
     const endpoint = isTV ? "search/tv" : "search/movie";
@@ -76,7 +156,7 @@ async function tmdbSearch(apiKey, type, title, year) {
     const r = await (0, node_fetch_1.default)(url.toString(), { method: "GET" });
     if (!r.ok)
         return null;
-    const j = await r.json();
+    const j = (await r.json());
     const first = (j?.results || [])[0];
     if (!first)
         return null;
@@ -85,12 +165,13 @@ async function tmdbSearch(apiKey, type, title, year) {
 async function tmdbDetails(apiKey, tmdbType, id) {
     const url = new URL(`${TMDB_BASE}/${tmdbType}/${id}`);
     url.searchParams.set("api_key", apiKey);
-    url.searchParams.set("append_to_response", "credits,videos");
+    url.searchParams.set("append_to_response", "credits,videos,images");
     const r = await (0, node_fetch_1.default)(url.toString(), { method: "GET" });
     if (!r.ok)
         return null;
-    return r.json();
+    return (await r.json());
 }
+// ---------- Main flow ----------
 async function tmdbEnrichFlow(uid, rawBody) {
     // Validate input
     const parsed = EnrichBodySchema.safeParse(rawBody);
@@ -104,7 +185,10 @@ async function tmdbEnrichFlow(uid, rawBody) {
     const envKey = process.env.TMDB_API_KEY;
     const apiKey = cfgKey || envKey;
     if (!apiKey) {
-        functions.logger.error("TMDB API key missing", { hasConfig: !!cfgKey, hasEnv: !!envKey });
+        functions.logger.error("TMDB API key missing", {
+            hasConfig: !!cfgKey,
+            hasEnv: !!envKey,
+        });
         const e = new Error("TMDB_API_KEY not set");
         e.code = "failed-precondition";
         throw e;
@@ -125,29 +209,41 @@ async function tmdbEnrichFlow(uid, rawBody) {
     }
     await rateRef.set({
         lastCallAt: admin.firestore.FieldValue.serverTimestamp(),
-        rateLimitedUntil: admin.firestore.Timestamp.fromDate(new Date(now + cooldownMs))
+        rateLimitedUntil: admin.firestore.Timestamp.fromDate(new Date(now + cooldownMs)),
     }, { merge: true });
     const results = [];
     for (const it of items) {
         const mediaRef = db.doc(`users/${uid}/media/${it.mediaId}`);
         const mediaSnap = await mediaRef.get();
         if (!mediaSnap.exists) {
-            results.push({ mediaId: it.mediaId, status: "error", message: "media not found" });
+            results.push({
+                mediaId: it.mediaId,
+                status: "error",
+                message: "media not found",
+            });
             continue;
         }
         const media = mediaSnap.data() || {};
-        // Skip if already enriched with artwork present
+        // NOTE: We still keep the "already enriched" short-circuit.
+        // If you later want to backfill logos/extras for existing items,
+        // we can relax this condition.
         if (media.tmdbId && (media.posterUrl || media.backdropUrl)) {
             results.push({ mediaId: it.mediaId, status: "skipped" });
             continue;
         }
         const key = cacheKey(it.type, it.title, it.year);
-        const cacheRef = db.collection(`users/${uid}/integrations_cache_tmdb`).doc(key);
-        let cached = await cacheRef.get().then(s => s.exists ? s.data() : null);
+        const cacheRef = db
+            .collection(`users/${uid}/integrations_cache_tmdb`)
+            .doc(key);
+        let cached = await cacheRef
+            .get()
+            .then((s) => (s.exists ? s.data() : null));
         // 30-day cache TTL
         const fresh = !!cached?.cachedAt &&
             typeof cached.cachedAt?.toDate === "function" &&
-            (Date.now() - cached.cachedAt.toDate().getTime() < 30 * 24 * 3600 * 1000);
+            Date.now() -
+                cached.cachedAt.toDate().getTime() <
+                30 * 24 * 3600 * 1000;
         try {
             if (!cached || !fresh) {
                 // Search by title (episodes => TV)
@@ -161,18 +257,28 @@ async function tmdbEnrichFlow(uid, rawBody) {
                     results.push({ mediaId: it.mediaId, status: "not_found" });
                     continue;
                 }
-                const genres = (details.genres || []).map((g) => g.name).filter(Boolean);
+                const genres = (details.genres || [])
+                    .map((g) => g.name)
+                    .filter(Boolean);
                 const overview = details.overview || null;
                 const releaseDate = details.release_date || null;
                 const firstAirDate = details.first_air_date || null;
-                const voteAverage = typeof details.vote_average === "number" ? details.vote_average : null;
+                const voteAverage = typeof details.vote_average === "number"
+                    ? details.vote_average
+                    : null;
                 const language = details.original_language || null;
-                const cast = (details.credits?.cast || []).slice(0, 10).map((c) => ({
+                const cast = (details.credits?.cast || [])
+                    .slice(0, 10)
+                    .map((c) => ({
                     name: c.name,
                     character: c.character,
                     profileUrl: pickBestImage(c.profile_path),
                 }));
                 const videoLink = (0, titleHelpers_1.pickYouTubeTrailer)(details.videos?.results);
+                // ✅ NEW: compute logoPath & extraVideos from TMDB details
+                const logoPath = pickBestLogoFromDetails(details);
+                const extraVideos = extractExtraVideos(details);
+                const extraVideosOrNull = extraVideos.length ? extraVideos : null;
                 const toWrite = {
                     tmdbId: details.id,
                     tmdbType: search.tmdbType, // "movie" | "tv"
@@ -182,17 +288,24 @@ async function tmdbEnrichFlow(uid, rawBody) {
                     firstAirDate,
                     posterPath: details.poster_path ?? null,
                     backdropPath: details.backdrop_path ?? null,
+                    logoPath: logoPath ?? null,
+                    extraVideos: extraVideosOrNull,
                     voteAverage,
                     language,
                     cast,
                     videoLink,
-                    cachedAt: admin.firestore.FieldValue.serverTimestamp()
+                    cachedAt: admin.firestore.FieldValue
+                        .serverTimestamp(),
                 };
                 await cacheRef.set(toWrite, { merge: true });
                 cached = toWrite;
             }
             if (!cached) {
-                results.push({ mediaId: it.mediaId, status: "error", message: "cache unavailable" });
+                results.push({
+                    mediaId: it.mediaId,
+                    status: "error",
+                    message: "cache unavailable",
+                });
                 continue;
             }
             // Merge write onto media doc (do not touch addedAt)
@@ -205,24 +318,41 @@ async function tmdbEnrichFlow(uid, rawBody) {
                 videoLink: cached.videoLink ?? media.videoLink ?? null,
                 releaseDate: cached.releaseDate ?? media.releaseDate ?? null,
                 firstAirDate: cached.firstAirDate ?? media.firstAirDate ?? null,
-                posterUrl: pickBestImage(cached.posterPath) ?? media.posterUrl ?? null,
-                backdropUrl: pickBestImage(cached.backdropPath) ?? media.backdropUrl ?? null,
+                posterUrl: pickBestImage(cached.posterPath) ??
+                    media.posterUrl ??
+                    null,
+                backdropUrl: pickBestImage(cached.backdropPath) ??
+                    media.backdropUrl ??
+                    null,
+                // ✅ NEW: write logoUrl from cached.logoPath (respect existing value if present)
+                logoUrl: pickBestImage(cached.logoPath) ??
+                    media.logoUrl ??
+                    null,
+                // ✅ NEW: write extraVideos (fallback to existing or null)
+                extraVideos: cached.extraVideos ??
+                    media.extraVideos ??
+                    null,
                 voteAverage: cached.voteAverage ?? media.voteAverage ?? null,
                 language: cached.language ?? media.language ?? null,
-                updatedAt: admin.firestore.FieldValue.serverTimestamp()
+                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
             };
             await mediaRef.set(payload, { merge: true });
             results.push({ mediaId: it.mediaId, status: "enriched" });
         }
         catch (err) {
-            results.push({ mediaId: it.mediaId, status: "error", message: err?.message || "TMDB error" });
+            results.push({
+                mediaId: it.mediaId,
+                status: "error",
+                message: err?.message || "TMDB error",
+            });
         }
     }
     return { results };
 }
 // Optional periodic sweep (unchanged)
 async function tmdbBackfillSweep() {
-    const snap = await db.collectionGroup("media")
+    const snap = await db
+        .collectionGroup("media")
         .where("tmdbId", "==", null)
         .limit(200)
         .get();
@@ -234,7 +364,9 @@ async function tmdbBackfillSweep() {
         const m = d.data();
         if (!uid || !m)
             continue;
-        const type = (m.type === "episode" ? "episode" : "movie");
+        const type = (m.type === "episode"
+            ? "episode"
+            : "movie");
         const title = m.normalizedTitle || m.title || m.filename || "unknown";
         const year = m.year;
         (byOwner[uid] || (byOwner[uid] = [])).push({ mediaId: d.id, type, title, year });
@@ -243,7 +375,7 @@ async function tmdbBackfillSweep() {
         const chunk = items.slice(0, 50);
         try {
             await tmdbEnrichFlow(uid, { items: chunk });
-            await new Promise(r => setTimeout(r, 1000));
+            await new Promise((r) => setTimeout(r, 1000));
         }
         catch (e) {
             console.error(`Skipping backfill for user ${uid} due to error: ${e.message}`);

@@ -45,6 +45,48 @@ const initFirebase_1 = require("./initFirebase");
 const titleHelpers_1 = require("./titleHelpers");
 const tmdbClient_1 = require("./tmdbClient");
 const corsHandler = (0, cors_1.default)({ origin: true });
+function normalizeExtraVideos(raw) {
+    if (!Array.isArray(raw) || raw.length === 0)
+        return null;
+    const mapped = raw
+        .map((v) => {
+        const key = typeof v?.key === "string" ? v.key : "";
+        const site = typeof v?.site === "string" ? v.site : "";
+        if (!key || !site)
+            return null;
+        return {
+            id: String(v.id ?? `${site}:${key}`),
+            key,
+            name: typeof v?.name === "string" ? v.name : null,
+            site,
+            type: typeof v?.type === "string" ? v.type : null,
+            official: Boolean(v?.official),
+            size: typeof v?.size === "number" ? v.size : null,
+        };
+    })
+        .filter(Boolean);
+    return mapped.length ? mapped : null;
+}
+function pickBestLogoFromDetails(details) {
+    const logos = details?.images?.logos;
+    if (!Array.isArray(logos) || logos.length === 0)
+        return null;
+    const sorted = [...logos].sort((a, b) => (b.vote_count ?? 0) - (a.vote_count ?? 0));
+    const preferredLangs = [
+        details?.original_language ?? null,
+        "en",
+    ];
+    for (const lang of preferredLangs) {
+        if (!lang)
+            continue;
+        const hit = sorted.find((l) => l.iso_639_1 === lang && l.file_path);
+        if (hit?.file_path) {
+            return (0, tmdbClient_1.backdropUrl)(hit.file_path, "original");
+        }
+    }
+    const first = sorted.find((l) => l.file_path);
+    return first?.file_path ? (0, tmdbClient_1.backdropUrl)(first.file_path, "original") : null;
+}
 /** ---------- Helpers to resolve canonical show doc ---------- **/
 function normalizeTitle(raw) {
     return (raw || "")
@@ -101,6 +143,8 @@ function mergeShowWithLocks(existing, incoming) {
         merged.backdropUrl = existing.backdropUrl;
     if (existing?.videoLocked)
         merged.videoLink = existing.videoLink;
+    if (existing?.logoLocked)
+        merged.logoUrl = existing.logoUrl;
     return merged;
 }
 /** ---------- MOVIE FIX ---------- **/
@@ -114,6 +158,9 @@ async function handleMovieFix(docRef, tmdbId, includeCast) {
     if (!details) {
         throw new functions.https.HttpsError("not-found", `Could not fetch movie details for TMDB ID ${tmdbId}.`);
     }
+    const extraVideos = normalizeExtraVideos(details.videos?.results) ??
+        (existing.extraVideos ?? null);
+    const logoUrlFromTmdb = pickBestLogoFromDetails(details) ?? existing.logoUrl ?? null;
     const incoming = {
         tmdbId: details.id,
         tmdbType: "movie",
@@ -128,6 +175,8 @@ async function handleMovieFix(docRef, tmdbId, includeCast) {
         posterUrl: (0, tmdbClient_1.posterUrl)(details.poster_path, "w500"),
         backdropUrl: (0, tmdbClient_1.backdropUrl)(details.backdrop_path, "original"),
         videoLink: (0, titleHelpers_1.pickYouTubeTrailer)(details.videos?.results),
+        logoUrl: logoUrlFromTmdb,
+        extraVideos,
     };
     if (includeCast) {
         incoming.cast = (details.credits?.cast || [])
@@ -213,6 +262,9 @@ async function handleTVEpisodeFix(episodeRef, tmdbShowId, includeCast) {
     // 2) Merge rich TMDB data into the canonical show doc
     const showSnap = await targetShowRef.get();
     const existingShow = showSnap.exists ? showSnap.data() || {} : {};
+    const extraVideos = normalizeExtraVideos(showDetails.videos?.results) ??
+        (existingShow.extraVideos ?? null);
+    const logoUrlFromTmdb = pickBestLogoFromDetails(showDetails) ?? existingShow.logoUrl ?? null;
     const incomingShow = {
         tmdbShowId: showDetails.id, // store ID as field, not doc id
         tmdbType: "tv",
@@ -225,6 +277,8 @@ async function handleTVEpisodeFix(episodeRef, tmdbShowId, includeCast) {
         language: showDetails.original_language ?? null,
         posterUrl: (0, tmdbClient_1.posterUrl)(showDetails.poster_path, "w500"),
         backdropUrl: (0, tmdbClient_1.backdropUrl)(showDetails.backdrop_path, "original"),
+        logoUrl: logoUrlFromTmdb,
+        extraVideos,
     };
     if (includeCast) {
         incomingShow.cast = (showDetails.aggregate_credits?.cast || [])
@@ -253,6 +307,7 @@ async function handleTVEpisodeFix(episodeRef, tmdbShowId, includeCast) {
         episodeUpdate.posterUrl = mergedShow.posterUrl ?? null;
     if (!ep?.backdropLocked)
         episodeUpdate.backdropUrl = mergedShow.backdropUrl ?? null;
+    // (We keep logoUrl/extraVideos show-level; episode docs can read via showRef.)
     await episodeRef.set(episodeUpdate, { merge: true });
     return {
         ok: true,

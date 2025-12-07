@@ -5,13 +5,11 @@ import ProtectedRoute from "@/components/ProtectedRoute";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Film, RefreshCw, Play, Check } from "lucide-react";
 import type { MediaDoc } from "@/lib/db.types";
-import { useMemo, useState, useRef, useEffect } from "react";
+import { useMemo, useState, useEffect, useCallback } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { WatchlistButton } from "@/components/watchlist-button";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
-import { useInfiniteFirestore } from "@/hooks/useInfiniteFirestore";
 import {
   MediaEditModal,
   type MediaEditModalItem,
@@ -19,6 +17,27 @@ import {
 import { PlayerDialog } from "@/components/PlayerDialog";
 import { usePlaybackProgress } from "@/hooks/usePlaybackProgress";
 import { postPlaybackReport } from "@/lib/playbackReport";
+import { db } from "@/lib/firebase";
+import { collection, getDocs, query, where } from "firebase/firestore";
+
+/* -----------------------------------------------------------------------------
+ * Types & cache
+ * -------------------------------------------------------------------------- */
+
+type MovieWithId = MediaDoc & { id: string };
+
+type MoviesCache = {
+  uid: string;
+  movies: MovieWithId[];
+  ts: number;
+};
+
+let moviesCache: MoviesCache | null = null;
+const MOVIES_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+/* -----------------------------------------------------------------------------
+ * Helpers
+ * -------------------------------------------------------------------------- */
 
 function getInitials(title: string = ""): string {
   return title
@@ -38,22 +57,31 @@ function parseYearStr(v?: string | null): number | null {
 }
 
 function getReleaseYear(item: any): number | null {
-  // Prefer explicit year fields if present
   if (Number.isFinite(item?.year) && item.year > 1800) return item.year;
   if (Number.isFinite(item?.releaseYear) && item.releaseYear > 1800)
     return item.releaseYear;
 
-  // Common string date fields in your docs (pick what you actually have)
   return (
     parseYearStr(item?.releaseDate) ??
     parseYearStr(item?.theatricalReleaseDate) ??
     parseYearStr(item?.tmdbReleaseDate) ??
-    parseYearStr(item?.firstAirDate) ?? // just in case
+    parseYearStr(item?.firstAirDate) ??
     null
   );
 }
 
-// Poster card for a MediaDoc
+function sortMoviesAlpha(list: MovieWithId[]): MovieWithId[] {
+  return [...list].sort((a, b) => {
+    const nameA = (a.normalizedTitle || a.title || "").toLocaleLowerCase();
+    const nameB = (b.normalizedTitle || b.title || "").toLocaleLowerCase();
+    return nameA.localeCompare(nameB, undefined, { sensitivity: "base" });
+  });
+}
+
+/* -----------------------------------------------------------------------------
+ * Poster card
+ * -------------------------------------------------------------------------- */
+
 function MediaDocCard({
   item,
   onEdit,
@@ -62,7 +90,7 @@ function MediaDocCard({
   resumeSeconds,
   onMarkWatched,
 }: {
-  item: MediaDoc & { id: string };
+  item: MovieWithId;
   onEdit: () => void;
   onPlay: (opts?: { startTime?: number; restart?: boolean }) => void;
   progressPercent?: number;
@@ -103,7 +131,6 @@ function MediaDocCard({
     Math.min(100, Math.floor(progressPercent ?? 0))
   );
 
-  // Small helper: 123s -> “2:03”
   const formatTimeShort = (sec?: number | null) => {
     if (!sec || sec <= 0) return "0:00";
     const s = Math.floor(sec % 60)
@@ -259,6 +286,9 @@ function MediaDocCard({
   );
 }
 
+/* -----------------------------------------------------------------------------
+ * Movie Library
+ * -------------------------------------------------------------------------- */
 
 function MovieLibrary() {
   const { user } = useAuthUser();
@@ -266,30 +296,75 @@ function MovieLibrary() {
   const { toast } = useToast();
 
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [movies, setMovies] = useState<MovieWithId[]>([]);
+  const [loading, setLoading] = useState(false);
 
-  const {
-    items: fetchedMovies,
-    loading,
-    hasMore,
-    attachSentinel,
-    resetAndFetch,
-    isFetchingNext,
-    placeholderCount,
-  } = useInfiniteFirestore<MediaDoc & { id: string }>({
-    collectionPath: uid ? `users/${uid}/media` : undefined,
-    where: [["type", "==", "movie"]],
-    orderBy: ["addedAt", "desc"],
-    pageSize: 24,
-    overscanPx: 1200, // start loading well before the gap
-    minRemaining: 6, // tail skeletons
-    map: (doc) =>
-      ({ id: doc.id, ...doc.data() } as MediaDoc & { id: string }),
-  });
+  const [editingItem, setEditingItem] =
+    useState<MediaEditModalItem | null>(null);
+  const [open, setOpen] = useState(false);
+  const [selectedMediaId, setSelectedMediaId] = useState<string | null>(null);
+  const [selectedTitle, setSelectedTitle] = useState<string | undefined>(
+    undefined
+  );
+  const [selectedStartTime, setSelectedStartTime] =
+    useState<number | null>(null);
 
-  const [movies, setMovies] = useState<Array<MediaDoc & { id: string }>>([]);
+  // 🔁 Fetch all movies once, with per-uid cache
+  const fetchMovies = useCallback(
+    async (opts?: { forceNetwork?: boolean }) => {
+      if (!uid) return;
+      const forceNetwork = opts?.forceNetwork ?? false;
+      const now = Date.now();
+
+      if (
+        !forceNetwork &&
+        moviesCache &&
+        moviesCache.uid === uid &&
+        now - moviesCache.ts < MOVIES_CACHE_TTL_MS
+      ) {
+        setMovies(moviesCache.movies);
+        setLoading(false);
+        return;
+      }
+
+      setLoading(true);
+      try {
+        const ref = collection(db, "users", uid, "media");
+        const q = query(ref, where("type", "==", "movie"));
+        const snap = await getDocs(q);
+
+        const all: MovieWithId[] = snap.docs.map((docSnap) => {
+          const data = docSnap.data() as MediaDoc;
+          return { id: docSnap.id, ...data };
+        });
+
+        const sorted = sortMoviesAlpha(all);
+        setMovies(sorted);
+
+        moviesCache = {
+          uid,
+          movies: sorted,
+          ts: Date.now(),
+        };
+      } catch (error) {
+        console.error("Failed to load movie library:", error);
+        toast({
+          title: "Failed to load movie library",
+          description:
+            error instanceof Error ? error.message : "Unknown error occurred",
+          variant: "destructive",
+        });
+      } finally {
+        setLoading(false);
+      }
+    },
+    [uid, toast]
+  );
+
+  // Initial load
   useEffect(() => {
-    setMovies(fetchedMovies);
-  }, [fetchedMovies]);
+    void fetchMovies();
+  }, [fetchMovies]);
 
   // 🔁 Playback progress (per-movie)
   const progressIds = useMemo(
@@ -304,54 +379,65 @@ function MovieLibrary() {
     realtime: true,
   });
 
-  const [editingItem, setEditingItem] =
-    useState<MediaEditModalItem | null>(null);
-  const [open, setOpen] = useState(false);
-  const [selectedMediaId, setSelectedMediaId] = useState<string | null>(
-    null
-  );
-  const [selectedTitle, setSelectedTitle] = useState<string | undefined>(
-    undefined
-  );
-  const [selectedStartTime, setSelectedStartTime] =
-    useState<number | null>(null);
-
-  const sentinelRef = useRef<HTMLDivElement | null>(null);
-  attachSentinel(sentinelRef.current);
-
-  const handleEdit = (item: MediaDoc & { id: string }) => {
+  const handleEdit = (item: MovieWithId) => {
     if (!uid) return;
+
+    const year = getReleaseYear(item) ?? undefined;
+    const logoUrl =
+      (item as any).logoUrl ?? null;
+    const videoLink =
+      (item as any).videoLink ?? null;
+    const tmdbId =
+      (item as any).tmdbId ?? undefined;
+
     setEditingItem({
       id: item.id,
       collectionPath: `users/${uid}/media`,
       kind: "movie",
       current: {
+        // Titles
         title: item.title,
         normalizedTitle: item.normalizedTitle,
-        posterUrl: item.posterUrl,
+        displayTitle:
+          item.normalizedTitle || item.title || "Unknown Title",
+        year,
+        // Artwork
+        posterUrl: item.posterUrl ?? null,
+        backdropUrl: item.backdropUrl ?? null,
+        logoUrl,
+        // Trailer
+        videoLink,
+        // TMDB match
+        tmdbId,
       },
     });
   };
 
   const handleApplied = (id: string, patch: Partial<MediaDoc>) => {
-    setMovies((prev) =>
-      prev.map((it) => (it.id === id ? { ...it, ...patch } : it))
-    );
+    setMovies((prev) => {
+      const updated = prev.map((it) =>
+        it.id === id ? ({ ...it, ...patch } as MovieWithId) : it
+      );
+
+      // keep cache in sync if it's for this uid
+      if (uid && moviesCache?.uid === uid) {
+        moviesCache = {
+          uid,
+          movies: updated,
+          ts: moviesCache.ts,
+        };
+      }
+
+      return updated;
+    });
   };
 
   const handleRefresh = async () => {
-    if (!resetAndFetch) return;
+    if (!uid) return;
     setIsRefreshing(true);
     try {
-      await resetAndFetch();
+      await fetchMovies({ forceNetwork: true });
       toast({ title: "Library refreshed" });
-    } catch (error: any) {
-      console.error("Failed to refresh library:", error);
-      toast({
-        title: "Refresh failed",
-        description: error.message,
-        variant: "destructive",
-      });
     } finally {
       setIsRefreshing(false);
     }
@@ -450,16 +536,6 @@ function MovieLibrary() {
               />
             );
           })}
-
-          {/* Tail placeholders for smoothness */}
-          {hasMore &&
-            Array.from({ length: placeholderCount }).map((_, i) => (
-              <div key={`ph-${i}`} className="space-y-2">
-                <Skeleton className="aspect-[2/3] w-full rounded-lg" />
-                <Skeleton className="h-5 w-5/6" />
-                <Skeleton className="h-4 w-1/3" />
-              </div>
-            ))}
         </div>
       )}
 
@@ -474,8 +550,6 @@ function MovieLibrary() {
           </p>
         </div>
       )}
-
-      {hasMore && <div ref={sentinelRef} className="h-10 w-full" />}
 
       <MediaEditModal
         open={!!editingItem}

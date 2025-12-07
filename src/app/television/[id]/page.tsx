@@ -26,6 +26,7 @@ import { CastSection } from '@/components/CastSection';
 import { PlayerDialog } from '@/components/PlayerDialog';
 import { usePlaybackProgress } from '@/hooks/usePlaybackProgress';
 import { resolveShowPlayTargetByRef } from '@/lib/resolveShowPlay';
+import { ExtraVideosSections } from '@/components/ExtraVideosSections';
 
 // Episodes with resume/progress decoration
 type EpisodeWithResume = MediaDoc & {
@@ -117,7 +118,6 @@ export default function ShowDetailPage({
 
   // --- Resume & progress wiring for episodes ---------------------------------
 
-  // IDs used for playback docs (episodes use their mediaId for streaming)
   const episodeMediaIds = useMemo(
     () =>
       episodesData
@@ -128,10 +128,8 @@ export default function ShowDetailPage({
     [episodesData]
   );
 
-  // Map: mediaId -> { position, percent }
   const progressMap = usePlaybackProgress(uid, episodeMediaIds);
 
-  // Decorate episodes with resumeSeconds + progressPercent
   const episodesWithResume: EpisodeWithResume[] = useMemo(
     () =>
       episodesData.map((ep) => {
@@ -158,9 +156,34 @@ export default function ShowDetailPage({
     [episodesWithResume]
   );
 
+  // 🔹 NEW: combine extras from show doc + episodes (runs on every render)
+  const combinedExtras = useMemo(() => {
+    const fromShow = Array.isArray((showData as any)?.extraVideos)
+      ? ((showData as any).extraVideos as any[])
+      : [];
+
+    const fromEpisodes = episodesData.flatMap((ep) => {
+      const extras = (ep as any).extraVideos;
+      return Array.isArray(extras) ? extras : [];
+    });
+
+    const seen = new Set<string>();
+    const unique: any[] = [];
+
+    for (const ev of [...fromShow, ...fromEpisodes]) {
+      if (!ev) continue;
+      const keyValue = (ev.id ?? ev.url ?? ev.key) as string | undefined;
+      const key = keyValue && String(keyValue);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      unique.push(ev);
+    }
+
+    return unique;
+  }, [showData, episodesData]);
+
   // --- Handlers --------------------------------------------------------------
 
-  // Hero CTA → resolve next/last episode via helper
   const handleHeroPlay = useCallback(async () => {
     if (!uid || !showId) return;
     try {
@@ -181,7 +204,6 @@ export default function ShowDetailPage({
     }
   }, [uid, showId, showData?.title]);
 
-  // Episode card play/resume
   const handleEpisodePlay = useCallback((episode: EpisodeWithResume) => {
     const mid = episode.mediaId as string | undefined;
     if (!mid) return;
@@ -240,10 +262,27 @@ export default function ShowDetailPage({
 
       {/* Episodes: resume + progress bar in EpisodeSelector */}
       <EpisodeSelector
-  episodes={episodesWithResume as any}
-  tmdbShowId={showData.tmdbShowId}
-  onPlay={handleEpisodePlay}
-/>
+        episodes={episodesWithResume as any}
+        tmdbShowId={showData.tmdbShowId}
+        onPlay={handleEpisodePlay}
+      />
+
+      <div className="pb-[5px]">
+         <hr className="border-border" />
+      </div>
+
+      {/* Extra videos (Trailers / Clips / Behind the Scenes) */}
+     
+      {Array.isArray(showData.extraVideos) &&
+        showData.extraVideos.length > 0 && (
+          <ExtraVideosSections
+            videos={showData.extraVideos as any[]}
+          />
+        )}
+
+      <div className="pb-[5px]">
+         <hr className="border-border" />
+      </div>
 
       {Array.isArray(showData.cast) && showData.cast.length > 0 && (
         <CastSection cast={showData.cast} />

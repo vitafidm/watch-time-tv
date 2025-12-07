@@ -6,15 +6,19 @@ import { Play } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 type ShowData = {
-  title: string;
-  overview: string;
+  title?: string;
+  showTitle?: string;
+  normalizedTitle?: string;
+  overview?: string;
   videoLink?: string | null;
   backdropUrl?: string | null;
   posterUrl?: string | null;
   tmdbShowId?: number;
   firstAirDate?: string;
+  releaseDate?: string;
   voteAverage?: number;
   genres?: string[];
+  logoUrl?: string | null;
   [key: string]: any;
 };
 
@@ -61,7 +65,25 @@ export function ShowHero({ show, onPlay, hasResume }: ShowHeroProps) {
   }, [phase, videoId]);
 
   const bg = show.backdropUrl || show.posterUrl || '';
+
   const buttonLabel = hasResume ? 'Resume' : 'Watch Now';
+
+  // 🔹 Title fallback: normalizedTitle → showTitle → title → "Untitled"
+  const title =
+    (show.normalizedTitle && show.normalizedTitle.trim()) ||
+    (show.showTitle && show.showTitle.trim()) ||
+    (show.title && show.title.trim()) ||
+    'Untitled';
+
+  // 🔹 Year from firstAirDate or releaseDate
+  const rawDate = show.firstAirDate || show.releaseDate;
+  const year = rawDate ? new Date(rawDate).getFullYear() : undefined;
+
+  // 🔹 Logo if present
+  const logo =
+    typeof show.logoUrl === 'string' && show.logoUrl.trim().length > 0
+      ? show.logoUrl
+      : undefined;
 
   return (
     <div className="relative w-full overflow-hidden rounded-xl aspect-[4/5] sm:aspect-video">
@@ -84,10 +106,10 @@ export function ShowHero({ show, onPlay, hasResume }: ShowHeroProps) {
           />
         )}
 
-        {bg && (
+        {bg ? (
           <Image
             src={bg}
-            alt={show.title}
+            alt={title}
             fill
             priority
             className={cn(
@@ -97,17 +119,36 @@ export function ShowHero({ show, onPlay, hasResume }: ShowHeroProps) {
               phase === 'playing' ? 'opacity-0' : 'opacity-100'
             )}
           />
+        ) : (
+          <div className="absolute inset-0 bg-muted" />
         )}
       </div>
 
-      {/* Gradient overlay (match featured row) */}
+      {/* Gradient overlay (match your featured row style) */}
       <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/50 to-transparent" />
 
       {/* Content – bottom/center on mobile, left-aligned on larger screens */}
       <div className="absolute inset-0 flex items-end justify-center px-4 py-6 sm:items-center sm:justify-start sm:p-8">
         <div className="w-full max-w-md md:max-w-lg lg:max-w-xl space-y-3 sm:space-y-4 text-center sm:text-left">
-          <h1 className="font-headline text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-bold text-white drop-shadow-2xl">
-            {show.title}
+          {/* 🔹 Logo box + title fallback + year */}
+          <h1 className="font-headline text-white drop-shadow-2xl flex flex-col items-center sm:items-start gap-2">
+            <div className="relative mx-auto sm:mx-0 h-16 sm:h-20 md:h-[11rem] w-full max-w-xs sm:max-w-sm md:max-w-md flex items-center justify-center sm:justify-start">
+              {logo ? (
+                <Image
+                  src={logo}
+                  alt={title}
+                  fill
+                  className="object-contain object-center sm:object-[left_bottom]"
+                  priority
+                />
+              ) : (
+                <span className="text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-bold leading-tight">
+                  {title}
+                </span>
+              )}
+            </div>
+
+            
           </h1>
 
           {show.overview && (
@@ -144,6 +185,7 @@ export function ShowHero({ show, onPlay, hasResume }: ShowHeroProps) {
                   'bg-[#f5f5f5] text-[#2f4f4f]'
                 )}
               >
+                
                 {buttonLabel}
               </button>
             )}

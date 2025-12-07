@@ -52,7 +52,6 @@ export function CastSection({ cast }: CastSectionProps) {
                 <div className="space-y-1 mt-2 text-left">
                   <p className="font-bold text-sm">{member.name}</p>
                   <p className="text-xs text-muted-foreground line-clamp-1">{member.character}</p>
-                  <p className="text-xs text-muted-foreground">8 Episodes</p>
                 </div>
               </div>
             </CarouselItem>

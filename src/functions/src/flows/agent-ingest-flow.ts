@@ -62,6 +62,21 @@ function scoreEpisode({
   return 0.25;
 }
 
+// Optional: future-proofed shape for extra videos (matches how TMDB extras will be stored)
+const ExtraVideoSchema = z.object({
+  id: z.string().min(1),
+  site: z.string().nullable().optional(),
+  key: z.string().nullable().optional(),
+  url: z.string().url().nullable().optional(),
+  type: z.string().nullable().optional(),
+  kind: z.string().nullable().optional(), // e.g. "trailer", "clip", "bloopers"
+  name: z.string().nullable().optional(),
+  official: z.boolean().nullable().optional(),
+  language: z.string().nullable().optional(), // iso_639_1
+  region: z.string().nullable().optional(),   // iso_3166_1
+  publishedAt: z.string().nullable().optional(),
+});
+
 // Zod schemas
 const MediaItemSchema = z.object({
   mediaId: z.string().min(1).optional(),
@@ -77,6 +92,7 @@ const MediaItemSchema = z.object({
   codec: z.string().optional(),
   posterUrl: z.string().url().optional(),
   backdropUrl: z.string().url().optional(),
+  logoUrl: z.string().url().nullable().optional(),              // ✅ logo from agent (rare) or TMDB later
   tmdbId: z.number().int().optional(),
   addedAt: z.union([z.string().datetime(), z.number()]).optional(),
 
@@ -85,6 +101,9 @@ const MediaItemSchema = z.object({
   episodeDescription: z.string().nullable().optional(),
   // Allow either TMDB still_path or a full URL later; do NOT require url() here.
   episodeThumbnail: z.string().nullable().optional(),
+
+  // ---- NEW: optional extra videos from agent (usually populated by TMDB flows later) ----
+  extraVideos: z.array(ExtraVideoSchema).nullable().optional(),
 
   // helper fields (server-computed)
   librarySection: z.enum(['movies','tv']).optional(),
@@ -254,7 +273,7 @@ export async function agentIngestFlow(rawInput: unknown): Promise<{ results: Ing
         }
       }
 
-      // ---- NEW: ensure the three episode fields exist on every new/updated doc without clobbering non-null values ----
+      // ---- Ensure episode fields exist on every new/updated doc without clobbering non-null values ----
       if (existingDoc?.episodeTitle === undefined && dataToUpsert.episodeTitle === undefined) {
         dataToUpsert.episodeTitle = null;
       }
@@ -263,6 +282,14 @@ export async function agentIngestFlow(rawInput: unknown): Promise<{ results: Ing
       }
       if (existingDoc?.episodeThumbnail === undefined && dataToUpsert.episodeThumbnail === undefined) {
         dataToUpsert.episodeThumbnail = null;
+      }
+
+      // ---- NEW: ensure logoUrl and extraVideos fields exist with null defaults, but do NOT clobber existing values ----
+      if (existingDoc?.logoUrl === undefined && dataToUpsert.logoUrl === undefined) {
+        dataToUpsert.logoUrl = null;
+      }
+      if (existingDoc?.extraVideos === undefined && dataToUpsert.extraVideos === undefined) {
+        dataToUpsert.extraVideos = null;
       }
       // ---------------------------------------------------------------------------------------
 

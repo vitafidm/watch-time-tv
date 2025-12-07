@@ -20,6 +20,7 @@ import { Play } from "lucide-react";
 import Image from "next/image";
 import { useAuthUser } from "@/hooks/useAuthUser";
 import { callFunction } from "@/lib/api";
+import { WheelGesturesPlugin } from "embla-carousel-wheel-gestures";
 
 // --- Types -------------------------------------------------------------------
 
@@ -83,12 +84,12 @@ function EpisodeCard({
     clampedPercent < 100;
 
   return (
-    <div className="flex flex-col h-full">
-      <Card className="flex-grow flex flex-col overflow-hidden">
+    <div className="flex h-full flex-col">
+      <Card className="flex flex-grow flex-col overflow-hidden">
         <button
           type="button"
           onClick={onClick}
-          className="relative aspect-video w-full bg-muted text-left"
+          className="group relative aspect-video w-full overflow-hidden bg-muted text-left"
         >
           {stillUrl ? (
             <Image
@@ -100,29 +101,35 @@ function EpisodeCard({
               sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
             />
           ) : (
-            <div className="w-full h-full bg-muted" />
+            <div className="h-full w-full bg-muted" />
           )}
 
-          {/* Overlay play/resume pill */}
-          <span className="absolute inset-0 flex items-center justify-center">
-            <span className="inline-flex items-center gap-2 rounded-full bg-black/70 px-4 py-2 text-sm font-medium text-white backdrop-blur-sm transition hover:bg-black/80">
+          {/* Hover-only play/resume pill (matches ExtraVideos overlay behavior) */}
+          <div
+            className="
+              pointer-events-none absolute -inset-px flex items-center justify-center
+              bg-black/0 opacity-0 transition-all duration-200
+              group-hover:bg-black/45 group-hover:opacity-100
+            "
+          >
+            <span className="pointer-events-auto inline-flex items-center gap-2 rounded-full bg-black/80 px-4 py-2 text-sm font-medium text-white shadow-lg backdrop-blur-sm">
               <Play className="h-4 w-4 fill-current" />
               <span>{hasResume ? "Resume" : "Play"}</span>
             </span>
-          </span>
+          </div>
         </button>
 
-        <CardContent className="p-4 flex-grow flex flex-col">
+        <CardContent className="flex flex-grow flex-col p-4">
           <p className="text-sm font-semibold text-primary">
             Episode {episode.episode}
           </p>
-          <h3 className="font-bold text-lg leading-tight truncate">
+          <h3 className="truncate text-lg font-bold leading-tight">
             {displayTitle}
           </h3>
 
           {/* Progress bar */}
           {showProgressBar && (
-            <div className="mt-2 h-1.5 w-full rounded-full bg-background/40 overflow-hidden">
+            <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-background/40">
               <div
                 className="h-full bg-primary"
                 style={{ width: `${clampedPercent}%` }}
@@ -131,7 +138,7 @@ function EpisodeCard({
           )}
 
           {displayOverview && (
-            <p className="text-sm text-muted-foreground mt-2 line-clamp-2">
+            <p className="mt-2 line-clamp-2 text-sm text-muted-foreground">
               {displayOverview}
             </p>
           )}
@@ -240,6 +247,25 @@ export function EpisodeSelector({
     return null;
   }
 
+  // Carousel opts + wheel gestures (same pattern as MediaCarousel / ExtraVideos)
+  const carouselOpts = useMemo(
+    () => ({
+      align: "start" as const,
+      dragFree: true,
+    }),
+    []
+  );
+
+  const plugins = useMemo(
+    () => [
+      WheelGesturesPlugin({
+        forceWheelAxis: "x",
+        wheelDraggingClass: "is-wheel-dragging",
+      }),
+    ],
+    []
+  );
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -266,10 +292,8 @@ export function EpisodeSelector({
       </div>
 
       <Carousel
-        opts={{
-          align: "start",
-          dragFree: true,
-        }}
+        opts={carouselOpts}
+        plugins={plugins}
         className="w-full"
       >
         <CarouselContent className="-ml-4">
@@ -283,7 +307,7 @@ export function EpisodeSelector({
             return (
               <CarouselItem
                 key={ep.mediaId ?? `${ep.season}-${ep.episode}`}
-                className="pl-4 basis-full sm:basis-1/2 md:basis-1/3 lg:basis-1/4"
+                className="basis-full pl-4 sm:basis-1/2 md:basis-1/3 lg:basis-1/4"
               >
                 <EpisodeCard
                   episode={ep}

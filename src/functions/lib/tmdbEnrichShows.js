@@ -71,15 +71,87 @@ async function tmdbSearchShow(apiKey, title) {
     const j = (await r.json());
     return (j?.results || [])[0] || null;
 }
-// TMDB details with rich data
+// TMDB details with rich data (now also includes images for logos)
 async function tmdbShowDetails(apiKey, id) {
     const url = new URL(`${TMDB_BASE}/tv/${id}`);
     url.searchParams.set("api_key", apiKey);
-    url.searchParams.set("append_to_response", "aggregate_credits,videos");
+    url.searchParams.set("append_to_response", "aggregate_credits,videos,images");
     const r = await (0, node_fetch_1.default)(url.toString());
     if (!r.ok)
         return null;
     return (await r.json());
+}
+function pickBestLogo(logos, preferredLangs = ["en"]) {
+    if (!Array.isArray(logos) || logos.length === 0)
+        return null;
+    // Sort logos by vote_count desc (as a rough quality proxy)
+    const sorted = [...logos].sort((a, b) => (b.vote_count ?? 0) - (a.vote_count ?? 0));
+    // Try preferred languages first
+    for (const lang of preferredLangs) {
+        const hit = sorted.find((l) => l.iso_639_1 === lang && l.file_path);
+        if (hit?.file_path) {
+            return fullImg(hit.file_path, "original");
+        }
+    }
+    // Fallback: first logo with a file_path
+    const first = sorted.find((l) => !!l.file_path);
+    return first?.file_path ? fullImg(first.file_path, "original") : null;
+}
+function normalizeVideoKind(rawType) {
+    const t = (rawType || "").toLowerCase();
+    if (t === "trailer")
+        return "trailer";
+    if (t === "teaser")
+        return "teaser";
+    if (t === "clip")
+        return "clip";
+    if (t === "behind the scenes" || t === "behind-the-scenes")
+        return "behind_the_scenes";
+    if (t === "featurette")
+        return "featurette";
+    if (t === "bloopers")
+        return "bloopers";
+    if (t === "opening credits")
+        return "opening_credits";
+    return "other";
+}
+function buildVideoUrl(site, key) {
+    if (!site || !key)
+        return null;
+    if (site === "YouTube")
+        return `https://www.youtube.com/watch?v=${key}`;
+    if (site === "Vimeo")
+        return `https://vimeo.com/${key}`;
+    return null;
+}
+function extractExtraVideos(details) {
+    const raw = details?.videos?.results;
+    if (!Array.isArray(raw) || raw.length === 0)
+        return [];
+    return raw.map((v) => {
+        const id = String(v.id ?? "");
+        const site = v.site ?? null;
+        const key = v.key ?? null;
+        const type = v.type ?? null;
+        const name = v.name ?? null;
+        const official = typeof v.official === "boolean" ? v.official : null;
+        const language = v.iso_639_1 ?? null;
+        const region = v.iso_3166_1 ?? null;
+        const publishedAt = v.published_at ?? null;
+        return {
+            id,
+            site,
+            key,
+            url: buildVideoUrl(site, key),
+            type,
+            kind: normalizeVideoKind(type),
+            name,
+            official,
+            language,
+            region,
+            publishedAt,
+        };
+    });
 }
 const handler = async (req, res) => {
     corsHandler(req, res, async () => {
@@ -98,7 +170,11 @@ const handler = async (req, res) => {
             if (!uid)
                 throw new functions.https.HttpsError("unauthenticated", "Invalid ID token.");
             const { batchSize = 25, startAfterId } = (req.body || {});
-            functions.logger.info("tmdbEnrichShows called", { uid, batchSize, startAfterId });
+            functions.logger.info("tmdbEnrichShows called", {
+                uid,
+                batchSize,
+                startAfterId,
+            });
             const apiKey = process.env.TMDB_API_KEY;
             if (!apiKey)
                 throw new functions.https.HttpsError("failed-precondition", "TMDB_API_KEY not set");
@@ -110,9 +186,16 @@ const handler = async (req, res) => {
                 .orderBy(admin.firestore.FieldPath.documentId());
             if (startAfterId)
                 q = q.startAfter(startAfterId);
-            const snap = await q.limit(Math.max(1, Math.min(100, Number(batchSize) || 25))).get();
+            const snap = await q
+                .limit(Math.max(1, Math.min(100, Number(batchSize) || 25)))
+                .get();
             if (snap.empty)
-                return res.json({ processed: 0, enriched: 0, skipped: 0, notFound: 0 });
+                return res.json({
+                    processed: 0,
+                    enriched: 0,
+                    skipped: 0,
+                    notFound: 0,
+                });
             let processed = 0;
             let enriched = 0;
             let skipped = 0;
@@ -127,30 +210,53 @@ const handler = async (req, res) => {
                 }
                 // Compose best input title
                 const title = (typeof data.title === "string" && data.title.trim()) ||
-                    (typeof data.titleCandidate === "string" && data.titleCandidate.trim()) ||
-                    (typeof data.normalizedTitle === "string" && data.normalizedTitle.trim()) ||
+                    (typeof data.titleCandidate === "string" &&
+                        data.titleCandidate.trim()) ||
+                    (typeof data.normalizedTitle === "string" &&
+                        data.normalizedTitle.trim()) ||
                     null;
                 if (!title) {
-                    await doc.ref.set({ matchStatus: "not_found", updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+                    await doc.ref.set({
+                        matchStatus: "not_found",
+                        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+                    }, { merge: true });
                     notFound++;
                     continue;
                 }
                 try {
                     const hit = await tmdbSearchShow(apiKey, title);
                     if (!hit) {
-                        await doc.ref.set({ matchStatus: "not_found", updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+                        await doc.ref.set({
+                            matchStatus: "not_found",
+                            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+                        }, { merge: true });
                         notFound++;
                         continue;
                     }
                     const details = await tmdbShowDetails(apiKey, hit.id);
                     if (!details) {
-                        await doc.ref.set({ matchStatus: "not_found", updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+                        await doc.ref.set({
+                            matchStatus: "not_found",
+                            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+                        }, { merge: true });
                         notFound++;
                         continue;
                     }
-                    // Respect locks: don't overwrite poster/backdrop if locked
+                    // Respect locks: don't overwrite poster/backdrop/logo if locked
                     const posterLocked = !!data.posterLocked;
                     const backdropLocked = !!data.backdropLocked;
+                    const logoLocked = !!data.logoLocked;
+                    // Compute logo URL from TMDB images
+                    const logoUrlFromTmdb = pickBestLogo(details.images?.logos, [
+                        details.original_language || "en",
+                        "en",
+                    ]);
+                    // Compute extra videos from TMDB
+                    const extraVideosFromTmdb = extractExtraVideos(details);
+                    const extraVideosValue = data.extraVideos ??
+                        (extraVideosFromTmdb.length ? extraVideosFromTmdb : null);
+                    // Choose final logoUrl respecting existing value
+                    const logoUrlValue = logoUrlFromTmdb ?? (data.logoUrl ?? null);
                     const update = {
                         // Write BOTH ids for compatibility
                         tmdbId: details.id,
@@ -159,20 +265,32 @@ const handler = async (req, res) => {
                         title: details.name || title,
                         normalizedTitle: details.name || title,
                         overview: details.overview || null,
-                        genres: (details.genres || []).map((g) => g?.name).filter(Boolean),
+                        genres: (details.genres || [])
+                            .map((g) => g?.name)
+                            .filter(Boolean),
                         firstAirDate: details.first_air_date || null,
                         voteAverage: details.vote_average ?? null,
                         language: details.original_language ?? null,
                         // Images (respect locks)
-                        ...(posterLocked ? {} : { posterUrl: fullImg(details.poster_path, "w500") }),
-                        ...(backdropLocked ? {} : { backdropUrl: fullImg(details.backdrop_path, "original") }),
+                        ...(posterLocked
+                            ? {}
+                            : { posterUrl: fullImg(details.poster_path, "w500") }),
+                        ...(backdropLocked
+                            ? {}
+                            : { backdropUrl: fullImg(details.backdrop_path, "original") }),
+                        ...(logoLocked ? {} : { logoUrl: logoUrlValue }),
+                        // Extra videos (no lock; but do not clobber an existing non-null value)
+                        extraVideos: extraVideosValue,
                         // Rich fields
                         cast: (details.aggregate_credits?.cast || [])
                             .slice(0, 10)
                             .map((c) => ({
                             name: c?.name || "",
                             character: (Array.isArray(c?.roles)
-                                ? c.roles.map((r) => r?.character).filter(Boolean).join(", ")
+                                ? c.roles
+                                    .map((r) => r?.character)
+                                    .filter(Boolean)
+                                    .join(", ")
                                 : c?.character) || "",
                             profileUrl: fullImg(c?.profile_path, "w185"),
                         })),
@@ -184,20 +302,36 @@ const handler = async (req, res) => {
                     enriched++;
                 }
                 catch (err) {
-                    functions.logger.error("tmdbEnrichShows inner error", { showId: doc.id, error: err });
-                    await doc.ref.set({ matchStatus: "error", updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+                    functions.logger.error("tmdbEnrichShows inner error", {
+                        showId: doc.id,
+                        error: err,
+                    });
+                    await doc.ref.set({
+                        matchStatus: "error",
+                        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+                    }, { merge: true });
                     notFound++;
                 }
             }
             const lastDoc = snap.docs[snap.docs.length - 1];
             const nextStartAfterId = lastDoc?.id || null;
-            return res.json({ processed, enriched, skipped, notFound, nextStartAfterId });
+            return res.json({
+                processed,
+                enriched,
+                skipped,
+                notFound,
+                nextStartAfterId,
+            });
         }
         catch (err) {
             functions.logger.error("tmdbEnrichShows fatal", { error: err });
             const code = err?.code || "internal";
             const message = err?.message || "An internal error occurred.";
-            const status = code === "unauthenticated" ? 403 : code === "invalid-argument" ? 400 : 500;
+            const status = code === "unauthenticated"
+                ? 403
+                : code === "invalid-argument"
+                    ? 400
+                    : 500;
             return res.status(status).json({ error: { code, message } });
         }
     });

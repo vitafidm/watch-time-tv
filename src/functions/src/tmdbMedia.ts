@@ -29,7 +29,9 @@ export default functions.https.onRequest(async (req, res) => {
       }
       if (k !== "movie" && k !== "tv") {
         functions.logger.error("tmdbMedia: invalid kind", { kind });
-        res.status(400).json({ error: "Invalid kind. Use 'movie' or 'tv'." });
+        res
+          .status(400)
+          .json({ error: "Invalid kind. Use 'movie' or 'tv' (or 'show')." });
         return;
       }
 
@@ -72,8 +74,7 @@ export default functions.https.onRequest(async (req, res) => {
 
       const data: any = await resp.json();
 
-      // Normalize posters/backdrops using your posterUrl helper.
-      // Sizes allowed by your typing: "w185" | "w500" | "original"
+      // Posters
       const posters =
         Array.isArray(data?.images?.posters)
           ? data.images.posters
@@ -82,12 +83,22 @@ export default functions.https.onRequest(async (req, res) => {
               .map((p: any) => ({ url: posterUrl(p.file_path, "w500") }))
           : [];
 
+      // Backdrops
       const backdrops =
         Array.isArray(data?.images?.backdrops)
           ? data.images.backdrops
               .filter((b: any) => b?.file_path)
               .slice(0, 60)
               .map((b: any) => ({ url: posterUrl(b.file_path, "original") }))
+          : [];
+
+      // Logos (new)
+      const logos =
+        Array.isArray(data?.images?.logos)
+          ? data.images.logos
+              .filter((l: any) => l?.file_path)
+              .slice(0, 60)
+              .map((l: any) => ({ url: posterUrl(l.file_path, "original") }))
           : [];
 
       // Normalize videos (YouTube trailers)
@@ -104,7 +115,7 @@ export default functions.https.onRequest(async (req, res) => {
               }))
           : [];
 
-      res.json({ posters, backdrops, videos });
+      res.json({ posters, backdrops, videos, logos });
     } catch (err: any) {
       functions.logger.error("tmdbMedia: internal error", {
         message: err?.message,

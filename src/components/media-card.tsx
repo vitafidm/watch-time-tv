@@ -81,7 +81,7 @@ export function MediaCard({
     <Wrapper>
       <div className="flex flex-col gap-2">
         {/* Poster frame */}
-        <div className="relative aspect-[2/3] w-full overflow-hidden rounded-lg shadow-lg bg-muted">
+        <div className="relative aspect-[2/3] w-full overflow-hidden rounded-[0.9rem] shadow-lg bg-muted">
           {poster ? (
             <Image
               src={poster}

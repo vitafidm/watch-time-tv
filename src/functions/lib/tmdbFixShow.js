@@ -85,25 +85,31 @@ exports.default = functions.https.onRequest((req, res) => {
             if (!newShowDataFromCache) {
                 throw new functions.https.HttpsError("not-found", `Could not find show with newShowId: ${newShowId}`);
             }
-            // Safe type assertion for TMDB-style payloads
-            const tmdbLike = newShowDataFromCache;
+            // Treat as CachedShow + be flexible for any extra fields
+            const cache = newShowDataFromCache;
             const newShowPayload = {
-                tmdbShowId: tmdbLike.id ?? newShowId,
-                title: tmdbLike.title || tmdbLike.name || null,
-                overview: tmdbLike.overview || null,
-                genres: (tmdbLike.genres || []).map((g) => g.name).filter(Boolean) || [],
-                firstAirDate: tmdbLike.first_air_date || null,
-                voteAverage: tmdbLike.vote_average ?? null,
-                posterUrl: tmdbLike.poster_path
-                    ? `https://image.tmdb.org/t/p/original${tmdbLike.poster_path}`
-                    : null,
-                backdropUrl: tmdbLike.backdrop_path
-                    ? `https://image.tmdb.org/t/p/original${tmdbLike.backdrop_path}`
-                    : null,
+                tmdbShowId: cache.tmdbShowId ?? newShowId,
                 tmdbType: "tv",
+                title: cache.title ?? null,
+                overview: cache.overview ?? null,
+                genres: Array.isArray(cache.genres) ? cache.genres : [],
+                firstAirDate: cache.firstAirDate ?? null,
+                posterUrl: cache.posterUrl ?? null,
+                backdropUrl: cache.backdropUrl ?? null,
+                logoUrl: cache.logoUrl ?? null,
+                extraVideos: cache.extraVideos ?? null,
                 matchStatus: "matched",
                 updatedAt: admin.firestore.FieldValue.serverTimestamp(),
             };
+            // Only set voteAverage if we *actually* have a numeric value, so we don't wipe existing
+            const cacheVote = typeof cache.voteAverage === "number"
+                ? cache.voteAverage
+                : typeof cache.vote_average === "number"
+                    ? cache.vote_average
+                    : null;
+            if (typeof cacheVote === "number") {
+                newShowPayload.voteAverage = cacheVote;
+            }
             if (keepOverrides && oldShowSnap.exists) {
                 const oldShowData = oldShowSnap.data();
                 if (oldShowData.displayTitle)
@@ -114,6 +120,9 @@ exports.default = functions.https.onRequest((req, res) => {
                     newShowPayload.backdropUrl = oldShowData.backdropUrl;
                 if (oldShowData.videoLocked && oldShowData.videoLink)
                     newShowPayload.videoLink = oldShowData.videoLink;
+                // NEW: preserve logo if user locked it
+                if (oldShowData.logoLocked && oldShowData.logoUrl)
+                    newShowPayload.logoUrl = oldShowData.logoUrl;
             }
             await newShowRef.set(newShowPayload, { merge: true });
             // --- 2. Find and retarget episodes ---

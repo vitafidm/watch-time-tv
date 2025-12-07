@@ -93,6 +93,20 @@ function scoreEpisode({ season, episode, filename, }) {
         return 0.8;
     return 0.25;
 }
+// Optional: future-proofed shape for extra videos (matches how TMDB extras will be stored)
+const ExtraVideoSchema = zod_1.z.object({
+    id: zod_1.z.string().min(1),
+    site: zod_1.z.string().nullable().optional(),
+    key: zod_1.z.string().nullable().optional(),
+    url: zod_1.z.string().url().nullable().optional(),
+    type: zod_1.z.string().nullable().optional(),
+    kind: zod_1.z.string().nullable().optional(), // e.g. "trailer", "clip", "bloopers"
+    name: zod_1.z.string().nullable().optional(),
+    official: zod_1.z.boolean().nullable().optional(),
+    language: zod_1.z.string().nullable().optional(), // iso_639_1
+    region: zod_1.z.string().nullable().optional(), // iso_3166_1
+    publishedAt: zod_1.z.string().nullable().optional(),
+});
 // Zod schemas
 const MediaItemSchema = zod_1.z.object({
     mediaId: zod_1.z.string().min(1).optional(),
@@ -108,6 +122,7 @@ const MediaItemSchema = zod_1.z.object({
     codec: zod_1.z.string().optional(),
     posterUrl: zod_1.z.string().url().optional(),
     backdropUrl: zod_1.z.string().url().optional(),
+    logoUrl: zod_1.z.string().url().nullable().optional(), // ✅ logo from agent (rare) or TMDB later
     tmdbId: zod_1.z.number().int().optional(),
     addedAt: zod_1.z.union([zod_1.z.string().datetime(), zod_1.z.number()]).optional(),
     // ---- NEW: accept episode fields on input (we still default to null on write) ----
@@ -115,6 +130,8 @@ const MediaItemSchema = zod_1.z.object({
     episodeDescription: zod_1.z.string().nullable().optional(),
     // Allow either TMDB still_path or a full URL later; do NOT require url() here.
     episodeThumbnail: zod_1.z.string().nullable().optional(),
+    // ---- NEW: optional extra videos from agent (usually populated by TMDB flows later) ----
+    extraVideos: zod_1.z.array(ExtraVideoSchema).nullable().optional(),
     // helper fields (server-computed)
     librarySection: zod_1.z.enum(['movies', 'tv']).optional(),
     normalizedTitle: zod_1.z.string().nullable().optional(),
@@ -260,7 +277,7 @@ async function agentIngestFlow(rawInput) {
                     dataToUpsert.matchMethod = dataToUpsert.normalizedTitle ? 'title+year' : null;
                 }
             }
-            // ---- NEW: ensure the three episode fields exist on every new/updated doc without clobbering non-null values ----
+            // ---- Ensure episode fields exist on every new/updated doc without clobbering non-null values ----
             if (existingDoc?.episodeTitle === undefined && dataToUpsert.episodeTitle === undefined) {
                 dataToUpsert.episodeTitle = null;
             }
@@ -269,6 +286,13 @@ async function agentIngestFlow(rawInput) {
             }
             if (existingDoc?.episodeThumbnail === undefined && dataToUpsert.episodeThumbnail === undefined) {
                 dataToUpsert.episodeThumbnail = null;
+            }
+            // ---- NEW: ensure logoUrl and extraVideos fields exist with null defaults, but do NOT clobber existing values ----
+            if (existingDoc?.logoUrl === undefined && dataToUpsert.logoUrl === undefined) {
+                dataToUpsert.logoUrl = null;
+            }
+            if (existingDoc?.extraVideos === undefined && dataToUpsert.extraVideos === undefined) {
+                dataToUpsert.extraVideos = null;
             }
             // ---------------------------------------------------------------------------------------
             if (existingDoc?.manualOverride === undefined)
