@@ -5,12 +5,14 @@ import React, { useEffect, useRef, useCallback } from "react";
 import { useHlsPlayback } from "@/hooks/useHlsPlayback";
 import { cn } from "@/lib/utils";
 import { postPlaybackReport } from "@/lib/playbackReport";
+import { useAuthUser } from "@/hooks/useAuthUser";
+import { useServerConfig } from "@/hooks/useServerConfig"; 
+import { useServerConnection } from "@/hooks/useServerConnection";
 
 /* =============================================================================
  * Types
  * ========================================================================== */
 
-// Public props for the VideoPlayer component
 type Props = {
   mediaId: string | null;
   className?: string;
@@ -19,19 +21,16 @@ type Props = {
   muted?: boolean;
   clickToToggleWhenNoControls?: boolean;
   startAtSeconds?: number;
+  fullWindow?: boolean; 
 };
 
-// Reporting constants (resume + heartbeat behavior)
+// Reporting constants
 const REPORT_INTERVAL_MS = 12_000;
 const RESUME_MIN_SECONDS = 10;
-
-// 🔒 Safety switch: only mark finished when the <video> actually ends.
 const FINISH_ONLY_ON_ENDED = true;
 
 /* =============================================================================
  * VideoPlayer component
- *  - Wraps the <video> tag and HLS hook
- *  - Handles fullscreen, overlay, click-to-toggle, and playback reporting
  * ========================================================================== */
 
 export function VideoPlayer({
@@ -42,81 +41,63 @@ export function VideoPlayer({
   muted = false,
   clickToToggleWhenNoControls = true,
   startAtSeconds,
+  fullWindow = false, 
 }: Props) {
-  // Container wrapper for fullscreen requests
+  
   const containerRef = useRef<HTMLDivElement | null>(null);
 
-  // Core player hook: wires HLS.js + signed URL playback
-  const { videoRef, status, error } = useHlsPlayback(mediaId, {
-    // startTime comes from parent (e.g. "continue watching" resume point)
-    startTime: Number.isFinite(startAtSeconds) ? Math.max(0, startAtSeconds!) : 0,
-  });
+  // 1. Get User Identity & Server Config
+  const { user } = useAuthUser();
+  const { config } = useServerConfig();
 
-  // Reporting state (all kept in refs so we don't trigger re-renders)
-  const lastReportAtRef = useRef<number>(0); // last time we sent a report (ms)
-  const lastSentPosRef = useRef<number>(0); // last position we actually reported (s)
-  const lastKnownDurRef = useRef<number>(0); // best known duration (s)
-  const flushInFlightRef = useRef<Promise<void> | null>(null); // current POST in-flight
-  const endedRef = useRef<boolean>(false); // tracks if "ended" event has fired
+  // 2. Resolve the Best Connection (Local vs Public)
+  // We rename 'status' -> 'connectionStatus' to avoid conflict with the player's status.
+  const { activeUrl, status: connectionStatus } = useServerConnection(
+    user?.uid,
+    config?.serverId,
+    config?.backendUrl || ""
+  );
 
-  /* ===========================================================================
-   * Fullscreen handling (attempt once per mediaId)
-   * ========================================================================== */
+  // 3. The "Patience" Logic
+  // We do not start the playback engine until the connection is fully resolved.
+  // This prevents the player from grabbing the Fallback IP and crashing on SSL errors.
+  const isReadyToMount = connectionStatus === "connected" || connectionStatus === "offline";
 
-  // Track which mediaId we've already tried fullscreen for (avoid spamming)
-  const triedFsForMedia = useRef<string | null>(null);
-
-  // Try to enter fullscreen (iOS webkit or standard Fullscreen APIs)
-  const tryEnterFullscreen = useCallback(async () => {
-    if (!mediaId) return;
-    if (triedFsForMedia.current === mediaId) return;
-    triedFsForMedia.current = mediaId;
-
-    const video = videoRef.current as any;
-    const container = containerRef.current as any;
-
-    // iOS Safari path
-    if (video && typeof video.webkitEnterFullscreen === "function") {
-      try { video.webkitEnterFullscreen(); return; } catch {}
+  // 4. Core player hook
+  // We pass 'null' as mediaId if we aren't ready, which keeps the hook dormant.
+  const { videoRef, status, error } = useHlsPlayback(
+    isReadyToMount ? mediaId : null, 
+    {
+      startTime: Number.isFinite(startAtSeconds) ? Math.max(0, startAtSeconds!) : 0,
+      baseUrl: activeUrl 
     }
+  );
 
-    // Standard / vendor-prefixed fullscreen on container
-    const req =
-      container?.requestFullscreen ||
-      container?.webkitRequestFullscreen ||
-      container?.msRequestFullscreen ||
-      container?.mozRequestFullScreen;
-    try { if (req) await req.call(container); } catch {}
-  }, [mediaId, videoRef]);
-
-  // On mediaId change: attempt fullscreen once, and clean up fullscreen on unmount
-  useEffect(() => {
-    if (!mediaId) return;
-    tryEnterFullscreen();
-    return () => {
-      if (document.fullscreenElement) {
-        document.exitFullscreen?.().catch(() => {});
-      }
-    };
-  }, [mediaId, tryEnterFullscreen]);
+  // Reporting refs
+  const lastReportAtRef = useRef<number>(0);
+  const lastSentPosRef = useRef<number>(0);
+  const lastKnownDurRef = useRef<number>(0);
+  const flushInFlightRef = useRef<Promise<void> | null>(null);
+  const endedRef = useRef<boolean>(false);
 
   /* ===========================================================================
    * UI state: overlay + error
    * ========================================================================== */
-
-  // Loading/preparing overlay states
-  const showOverlay = status === "loading" || status === "preparing";
-  const overlayText = status === "preparing" ? "Preparing your video…" : "Loading…";
-
-  // Error banner flag
+  // While searching for connection, show overlay
+  const isSearching = connectionStatus === "searching" || connectionStatus === "idle";
+  
+  const showOverlay = isSearching || status === "loading" || status === "preparing";
+  
+  const overlayText = isSearching 
+    ? "Finding your server..." 
+    : (status === "preparing" ? "Preparing your video…" : "Loading…");
+    
   const showError = status === "error";
 
   /* ===========================================================================
-   * Interaction: click-to-toggle when controls are hidden
+   * Interaction
    * ========================================================================== */
-
   const onCanvasClick = useCallback(async () => {
-    // Only enable click-to-toggle when controls are *not* visible
     if (controls || !clickToToggleWhenNoControls) return;
     const v = videoRef.current;
     if (!v) return;
@@ -126,13 +107,7 @@ export function VideoPlayer({
   /* ===========================================================================
    * Progress reporting helpers
    * ========================================================================== */
-
-  // Best-effort duration resolver:
-  //  1) metadata duration
-  //  2) seekable range end
-  //  3) last known good duration
   function resolveDuration(v: HTMLVideoElement): number {
-    // Prefer true metadata duration; fall back to seekable end; cache last good
     const md = v.duration;
     if (Number.isFinite(md) && md > 0) return md;
     try {
@@ -145,42 +120,35 @@ export function VideoPlayer({
     return lastKnownDurRef.current || 0;
   }
 
-  // Throttled progress reporter (for resume + "finished" signals)
   const flushReport = useCallback(
     async (isFinal = false) => {
       if (!mediaId) return;
       const v = videoRef.current;
       if (!v) return;
 
-      // If we already processed 'ended' and this is another final call, skip
       if (isFinal && endedRef.current) return;
 
       const now = Date.now();
       const since = now - (lastReportAtRef.current || 0);
-      // Non-final reports are throttled by REPORT_INTERVAL_MS
       if (!isFinal && since < REPORT_INTERVAL_MS) return;
 
       let pos = Math.max(0, Math.floor(v.currentTime || 0));
       let dur = Math.max(1, Math.floor(resolveDuration(v) || 0));
 
-      // Keep the largest seen duration to avoid backward jumps
       if (dur < lastKnownDurRef.current) dur = lastKnownDurRef.current;
       lastKnownDurRef.current = dur;
 
       if (!Number.isFinite(pos)) pos = 0;
       if (pos > dur) pos = dur;
 
-      // Ignore short "crumbs" unless this is a final save (no resume < RESUME_MIN_SECONDS)
       if (pos < RESUME_MIN_SECONDS && !isFinal) {
         lastReportAtRef.current = now;
         return;
       }
 
-      // 🚫 Hard guard: only treat as finished when 'ended' actually fired.
       const isPlaybackFinished = FINISH_ONLY_ON_ENDED ? endedRef.current : false;
-
-      // De-dupe tiny repeats when not finishing
       const movedEnough = Math.abs(pos - lastSentPosRef.current) >= 2;
+      
       if (!isFinal && !isPlaybackFinished && !movedEnough) {
         lastReportAtRef.current = now;
         return;
@@ -191,31 +159,22 @@ export function VideoPlayer({
 
       try {
         if (!flushInFlightRef.current) {
-          // Include light debug context (harmless extras for your backend)
           const payload: any = {
             mediaId,
             position: pos,
             duration: dur,
             finished: isPlaybackFinished,
-            // debug-only fields:
             dbg: {
               paused: v.paused,
               ended: v.ended,
               readyState: v.readyState,
-              bufferedEnd:
-                (() => {
-                  try {
-                    const b = v.buffered;
-                    return b && b.length ? Math.floor(b.end(b.length - 1)) : 0;
-                  } catch { return 0; }
-                })(),
             },
           };
           flushInFlightRef.current = postPlaybackReport(payload);
         }
         await flushInFlightRef.current;
       } catch {
-        // best-effort (swallow network errors)
+        // ignore
       } finally {
         flushInFlightRef.current = null;
       }
@@ -224,40 +183,28 @@ export function VideoPlayer({
   );
 
   /* ===========================================================================
-   * Event wiring: video + document lifecycle
-   *  - timeupdate: periodic progress pings
-   *  - pause / ended: final-ish reports
-   *  - visibilitychange / beforeunload: "best-effort" flushes
+   * Lifecycle Events
    * ========================================================================== */
-
   useEffect(() => {
     const v = videoRef.current;
     if (!v || !mediaId) return;
 
-    // Reset tracking for new media
     endedRef.current = false;
     lastKnownDurRef.current = 0;
 
-    // Regular heartbeat while playing
     const onTime = () => { void flushReport(false); };
-
-    // On pause, treat as a final-ish save (capture resume point)
     const onPause = () => { void flushReport(true); };
-
-    // On natural end, mark finished + flush one last time
     const onEnded = () => { endedRef.current = true; void flushReport(true); };
 
     v.addEventListener("timeupdate", onTime);
     v.addEventListener("pause", onPause);
     v.addEventListener("ended", onEnded);
 
-    // Browser/tab visibility change → flush final progress when hidden
     const onHidden = () => {
       if (document.visibilityState === "hidden") void flushReport(true);
     };
     document.addEventListener("visibilitychange", onHidden);
 
-    // Before page unload, try to finish any in-flight request
     const onBeforeUnload = async (e: BeforeUnloadEvent) => {
       if (flushInFlightRef.current) {
         e.preventDefault();
@@ -266,27 +213,28 @@ export function VideoPlayer({
     };
     window.addEventListener("beforeunload", onBeforeUnload);
 
-    // Cleanup handlers on unmount or media change
     return () => {
       v.removeEventListener("timeupdate", onTime);
       v.removeEventListener("pause", onPause);
       v.removeEventListener("ended", onEnded);
       document.removeEventListener("visibilitychange", onHidden);
       window.removeEventListener("beforeunload", onBeforeUnload);
-
-      // Last best-effort flush if the video did not naturally end
       if (!v.ended) void flushReport(true);
     };
   }, [mediaId, flushReport, videoRef]);
 
   /* ===========================================================================
-   * Render: container, <video>, overlay + error banner
+   * Render
    * ========================================================================== */
 
   return (
     <div
       ref={containerRef}
-      className={cn("relative bg-black", className)}
+      className={cn(
+        "bg-black overflow-hidden",
+        fullWindow ? "fixed inset-0 z-50 h-[100dvh] w-screen" : "relative h-full w-full",
+        className
+      )}
       onClick={onCanvasClick}
     >
       <video
@@ -302,17 +250,20 @@ export function VideoPlayer({
       />
 
       {showOverlay && (
-        <div className="pointer-events-none absolute inset-0 grid place-items-center bg-black">
+        <div className="pointer-events-none absolute inset-0 grid place-items-center bg-black/50 backdrop-blur-sm z-10">
           <div className="flex flex-col items-center gap-4">
-            <div className="h-10 w-10 animate-spin rounded-full border-2 border-white/20 border-t-white" />
-            <div className="text-sm text-white/80">{overlayText}</div>
+            <div className="h-12 w-12 animate-spin rounded-full border-4 border-white/20 border-t-white" />
+            <div className="text-sm font-medium text-white/90 animate-pulse">{overlayText}</div>
           </div>
         </div>
       )}
 
       {showError && (
-        <div className="pointer-events-none absolute left-1/2 top-4 -translate-x-1/2 rounded-md bg-red-600/90 px-3 py-1 text-sm text-white">
-          {String(error || "Playback error")}
+        <div className="absolute inset-0 grid place-items-center bg-black/80 z-20">
+          <div className="rounded-lg bg-red-900/80 px-6 py-4 text-center">
+            <p className="text-red-200 text-lg font-semibold mb-1">Playback Error</p>
+            <p className="text-white/90 text-sm">{String(error || "Unknown error")}</p>
+          </div>
         </div>
       )}
     </div>

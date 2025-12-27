@@ -47,6 +47,7 @@ export interface MediaEditModalItem {
     videoLink?: string | null;
     showTitle?: string;
     showRef?: string;
+    filename?: string | null;
   };
 }
 
@@ -135,6 +136,7 @@ export function MediaEditModal({
   const [isFixing, setIsFixing] = React.useState(false);
 
   const displayTitleText =
+    item?.current.filename ||
     item?.current.displayTitle ||
     item?.current.title ||
     item?.current.showTitle ||
@@ -404,10 +406,28 @@ export function MediaEditModal({
 
       // 3) Reflect changes back to caller immediately
       const patch: Record<string, any> = {};
-      if (matchChanged) {
-        patch.displayTitle = selectedMatch.title;
-        patch.normalizedTitle = selectedMatch.title;
+
+      // 🔹 Always keep local title fields in sync with whatever match is selected,
+      // just like we do for posterUrl. This makes the library update instantly.
+      const newTitle =
+        selectedMatch.title ||
+        item.current.displayTitle ||
+        item.current.normalizedTitle ||
+        item.current.title ||
+        item.current.showTitle ||
+        null;
+
+      if (newTitle) {
+        patch.title = newTitle;
+        patch.normalizedTitle = newTitle;
+        (patch as any).displayTitle = newTitle;
       }
+
+      // 🔹 Keep tmdbId in sync locally so future opens of the modal see
+      // the correct "current" match.
+      patch.tmdbId = selectedMatch.tmdbId;
+
+      // Existing asset patches (posters, backdrops, trailers, logos)
       if (payload.posterUrl) patch.posterUrl = payload.posterUrl;
       if (payload.backdropUrl) patch.backdropUrl = payload.backdropUrl;
       if (payload.videoLink) patch.videoLink = payload.videoLink;

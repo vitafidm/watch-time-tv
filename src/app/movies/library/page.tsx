@@ -70,6 +70,18 @@ function getReleaseYear(item: any): number | null {
   );
 }
 
+function getDisplayTitle(item: MovieWithId): string {
+  const anyItem = item as any;
+  return (
+    anyItem.displayTitle ||          // canon from TMDB / Fix Match
+    item.normalizedTitle ||          // cleaned-up ingest title
+    item.title ||                    // raw title from ingest
+    anyItem.filename ||              // last resort: filename
+    "Unknown Title"
+  );
+}
+
+
 function sortMoviesAlpha(list: MovieWithId[]): MovieWithId[] {
   return [...list].sort((a, b) => {
     const nameA = (a.normalizedTitle || a.title || "").toLocaleLowerCase();
@@ -97,7 +109,7 @@ function MediaDocCard({
   resumeSeconds?: number | null;
   onMarkWatched?: (() => void) | null;
 }) {
-  const displayTitle = item.normalizedTitle || item.title;
+  const displayTitle = getDisplayTitle(item);
 
   const mediaItem = useMemo(() => {
     let releaseDate = new Date().toISOString();
@@ -383,12 +395,17 @@ function MovieLibrary() {
     if (!uid) return;
 
     const year = getReleaseYear(item) ?? undefined;
-    const logoUrl =
-      (item as any).logoUrl ?? null;
-    const videoLink =
-      (item as any).videoLink ?? null;
-    const tmdbId =
-      (item as any).tmdbId ?? undefined;
+    const logoUrl = (item as any).logoUrl ?? null;
+    const videoLink = (item as any).videoLink ?? null;
+    const tmdbId = (item as any).tmdbId ?? undefined;
+    const filename = (item as any).filename ?? null;
+    const displayTitle =
+       (item as any).displayTitle ||
+       item.normalizedTitle ||
+       item.title ||
+       (item as any).filename ||
+       "";
+
 
     setEditingItem({
       id: item.id,
@@ -398,9 +415,9 @@ function MovieLibrary() {
         // Titles
         title: item.title,
         normalizedTitle: item.normalizedTitle,
-        displayTitle:
-          item.normalizedTitle || item.title || "Unknown Title",
+        displayTitle,
         year,
+        filename,
         // Artwork
         posterUrl: item.posterUrl ?? null,
         backdropUrl: item.backdropUrl ?? null,
@@ -530,7 +547,7 @@ function MovieLibrary() {
                       ? opts.startTime
                       : null
                   );
-                  setSelectedTitle(item.title || item.normalizedTitle);
+                  setSelectedTitle(getDisplayTitle(item));
                   setOpen(true);
                 }}
               />
