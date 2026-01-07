@@ -18,7 +18,7 @@ import {
   Images,
   Image as ImageIcon,
   CheckCircle,
-  BadgeCent, // NEW: icon for Logos
+  BadgeCent,
 } from "lucide-react";
 import Image from "next/image";
 import { callFunction } from "@/lib/api";
@@ -26,6 +26,21 @@ import { useToast } from "@/hooks/use-toast";
 import { useAuthUser } from "@/hooks/useAuthUser";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
+
+/* =============================================================================
+ * Helpers
+ * ========================================================================== */
+
+function getYouTubeId(url?: string | null): string | null {
+  if (!url) return null;
+  const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
+  const match = url.match(regExp);
+  return match && match[2].length === 11 ? match[2] : null;
+}
+
+/* =============================================================================
+ * Types
+ * ========================================================================== */
 
 export interface MediaEditModalItem {
   id: string; // media doc id (NOT collection item id)
@@ -43,7 +58,7 @@ export interface MediaEditModalItem {
     year?: number;
     posterUrl?: string | null;
     backdropUrl?: string | null;
-    logoUrl?: string | null;       // NEW: current logo
+    logoUrl?: string | null;
     videoLink?: string | null;
     showTitle?: string;
     showRef?: string;
@@ -56,7 +71,6 @@ interface MediaEditModalProps {
   onClose: () => void;
   item: MediaEditModalItem | null;
   onApplied?: (id: string, patch: Partial<any>) => void;
-
   /** Called after a successful update+propagation so parents can refresh UI */
   onAfterUpdate?: () => void;
 }
@@ -72,7 +86,7 @@ type TmdbMediaData = {
   posters: { url: string }[];
   backdrops: { url: string }[];
   videos: { key: string; name: string; type: string; thumbnailUrl: string }[];
-  logos: { url: string }[]; // NEW
+  logos: { url: string }[];
 };
 
 function titleForSearch(item: MediaEditModalItem | null): string | null {
@@ -100,6 +114,51 @@ function resolveInitialTmdbId(item: MediaEditModalItem | null) {
   return cur.tmdbId ?? cur.tmdbMovieId ?? null;
 }
 
+/* =============================================================================
+ * Sub-Component: Manual URL Input
+ * ========================================================================== */
+
+function ManualUrlInput({
+  onApply,
+  placeholder = "Enter a URL...",
+}: {
+  onApply: (val: string) => void;
+  placeholder?: string;
+}) {
+  const [val, setVal] = React.useState("");
+
+  const handleApply = () => {
+    if (!val.trim()) return;
+    onApply(val.trim());
+    setVal(""); // Clear after applying
+  };
+
+  return (
+    // 1. Removed padding (p-3 -> p-0) to flush with edges
+    <div className="p-3 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+      <div className="flex gap-2">
+        <Input
+          value={val}
+          onChange={(e) => setVal(e.target.value)}
+          placeholder={placeholder}
+          // 2. Styled input to be borderless and flush
+          className="flex-1 border-0 rounded-none shadow-none focus-visible:ring-0 px-4 h-12"
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              handleApply();
+            }
+          }}
+        />
+        {/* 3. Removed the Button (Magnifying glass) */}
+      </div>
+    </div>
+  );
+}
+
+/* =============================================================================
+ * Main Component
+ * ========================================================================== */
 
 export function MediaEditModal({
   open,
@@ -128,9 +187,14 @@ export function MediaEditModal({
 
   // Staged asset picks (not written until Update)
   const [stagedPoster, setStagedPoster] = React.useState<string | null>(null);
-  const [stagedBackdrop, setStagedBackdrop] = React.useState<string | null>(null);
+  const [stagedBackdrop, setStagedBackdrop] = React.useState<string | null>(
+    null
+  );
+  const [stagedLogo, setStagedLogo] = React.useState<string | null>(null);
+  
+  // Video staging: either a Key (YouTube) or a raw URL
   const [stagedVideoKey, setStagedVideoKey] = React.useState<string | null>(null);
-  const [stagedLogo, setStagedLogo] = React.useState<string | null>(null); // NEW
+  const [stagedVideoUrl, setStagedVideoUrl] = React.useState<string | null>(null);
 
   // Saving state
   const [isFixing, setIsFixing] = React.useState(false);
@@ -178,10 +242,12 @@ export function MediaEditModal({
       setSelectedMatch(null);
       setMediaData(null);
       setIsSearching(false);
+      
       setStagedPoster(null);
       setStagedBackdrop(null);
+      setStagedLogo(null);
       setStagedVideoKey(null);
-      setStagedLogo(null); // NEW
+      setStagedVideoUrl(null);
       return;
     }
 
@@ -201,7 +267,11 @@ export function MediaEditModal({
           item.current.showTitle ||
           q ||
           "";
-        setSelectedMatch({ kind: apiKind, tmdbId: initialTmdbId, title: fallbackTitle });
+        setSelectedMatch({
+          kind: apiKind,
+          tmdbId: initialTmdbId,
+          title: fallbackTitle,
+        });
         await fetchMediaData(apiKind, initialTmdbId);
 
         // background search to populate the left list
@@ -236,7 +306,11 @@ export function MediaEditModal({
           setSearchResults(results || []);
           const first = results?.[0];
           if (first) {
-            setSelectedMatch({ kind: apiKind, tmdbId: first.id, title: first.title });
+            setSelectedMatch({
+              kind: apiKind,
+              tmdbId: first.id,
+              title: first.title,
+            });
             await fetchMediaData(apiKind, first.id);
           }
         } catch (err: any) {
@@ -272,7 +346,11 @@ export function MediaEditModal({
         handleSelectMatch(results[0], true);
       }
     } catch (err: any) {
-      toast({ title: "Search failed", description: err.message, variant: "destructive" });
+      toast({
+        title: "Search failed",
+        description: err.message,
+        variant: "destructive",
+      });
     } finally {
       setIsSearching(false);
     }
@@ -283,23 +361,39 @@ export function MediaEditModal({
     const apiKind = isShow ? "tv" : "movie";
     setSelectedMatch({ kind: apiKind, tmdbId: result.id, title: result.title });
     if (!isAuto) setSearchQuery(result.title);
-    // reset staged selections when the match changes
+    
+    // Reset staged selections when match changes
     setStagedPoster(null);
     setStagedBackdrop(null);
+    setStagedLogo(null);
     setStagedVideoKey(null);
-    setStagedLogo(null); // NEW
+    setStagedVideoUrl(null);
+    
     fetchMediaData(apiKind, result.id);
   };
 
   // --- Staging selectors (NO network calls here) ---
   const stagePoster = (url: string) => setStagedPoster(url);
   const stageBackdrop = (url: string) => setStagedBackdrop(url);
-  const stageVideo = (key: string) => setStagedVideoKey(key);
-  const stageLogo = (url: string) => setStagedLogo(url); // NEW
+  const stageLogo = (url: string) => setStagedLogo(url);
+  
+  // Handles YouTube Key OR Raw URL
+  const stageVideoInput = (input: string) => {
+    const ytId = getYouTubeId(input);
+    if (ytId) {
+      setStagedVideoKey(ytId);
+      setStagedVideoUrl(null); // Clear raw url if it resolved to a key
+    } else {
+      setStagedVideoUrl(input);
+      setStagedVideoKey(null); // Clear key if raw url provided
+    }
+  };
 
   // Dirty detection for enabling the Update button
   const currentTmdbId = resolveInitialTmdbId(item);
-  const matchChanged = !!(selectedMatch && selectedMatch.tmdbId !== currentTmdbId);
+  const matchChanged = !!(
+    selectedMatch && selectedMatch.tmdbId !== currentTmdbId
+  );
   const posterChanged = !!(
     stagedPoster && stagedPoster !== (item?.current.posterUrl ?? null)
   );
@@ -309,12 +403,20 @@ export function MediaEditModal({
   const logoChanged = !!(
     stagedLogo && stagedLogo !== (item?.current.logoUrl ?? null)
   );
+
+  // Video logic: check key-based construction OR raw url equality
+  const currentVideoLink = item?.current.videoLink ?? null;
   const videoChanged = !!(
-    stagedVideoKey &&
-    `https://www.youtube.com/watch?v=${stagedVideoKey}` !==
-      (item?.current.videoLink ?? null)
+    (stagedVideoKey && `https://www.youtube.com/watch?v=${stagedVideoKey}` !== currentVideoLink) ||
+    (stagedVideoUrl && stagedVideoUrl !== currentVideoLink)
   );
-  const hasChanges = matchChanged || posterChanged || backdropChanged || logoChanged || videoChanged;
+
+  const hasChanges =
+    matchChanged ||
+    posterChanged ||
+    backdropChanged ||
+    logoChanged ||
+    videoChanged;
 
   // Apply everything atomically when user clicks Update
   const handleConfirmFix = async () => {
@@ -345,16 +447,17 @@ export function MediaEditModal({
           if (!stagedBackdrop && mediaData.backdrops?.[0]?.url) {
             setStagedBackdrop(mediaData.backdrops[0].url);
           }
-          if (!stagedVideoKey && mediaData.videos?.[0]?.key) {
-            setStagedVideoKey(mediaData.videos[0].key);
-          }
           if (!stagedLogo && mediaData.logos?.[0]?.url) {
             setStagedLogo(mediaData.logos[0].url);
+          }
+          // Default video logic: only if no manual entry
+          if (!stagedVideoKey && !stagedVideoUrl && mediaData.videos?.[0]?.key) {
+            setStagedVideoKey(mediaData.videos[0].key);
           }
         }
       }
 
-      // 2) Persist any staged assets (poster/backdrop/video/logo)
+      // 2) Persist any staged assets
       const payload: {
         collection: string;
         docId: string;
@@ -364,18 +467,19 @@ export function MediaEditModal({
         logoUrl?: string;
       } = { collection: item.collectionPath, docId: item.id };
 
-      // 1) Start with anything the user explicitly staged in this session
+      // 1) Start with anything the user explicitly staged
       if (stagedPoster) payload.posterUrl = stagedPoster;
       if (stagedBackdrop) payload.backdropUrl = stagedBackdrop;
-      if (stagedVideoKey) {
-        payload.videoLink = `https://www.youtube.com/watch?v=${stagedVideoKey}`;
-      }
       if (stagedLogo) payload.logoUrl = stagedLogo;
 
-      // 2) If the TMDB match did NOT change, keep whatever poster/backdrop
-      //    is currently on the doc when the user hasn't picked new ones.
-      //    This prevents poster/backdrop from "resetting" when you only
-      //    change the logo or trailer.
+      // Video: prefer Key if set, else Raw URL
+      if (stagedVideoKey) {
+        payload.videoLink = `https://www.youtube.com/watch?v=${stagedVideoKey}`;
+      } else if (stagedVideoUrl) {
+        payload.videoLink = stagedVideoUrl;
+      }
+
+      // 2) If Match didn't change, keep existing assets if not replaced
       if (!matchChanged) {
         if (!payload.posterUrl && item.current.posterUrl) {
           payload.posterUrl = item.current.posterUrl;
@@ -385,8 +489,7 @@ export function MediaEditModal({
         }
       }
 
-      // 3) If the match DID change, and the user didn't explicitly stage art/logo,
-      //    fall back to first TMDB assets for the *new* match.
+      // 3) If Match DID change, use defaults if not staged
       if (matchChanged && mediaData) {
         if (!payload.posterUrl && mediaData.posters?.[0]?.url) {
           payload.posterUrl = mediaData.posters[0].url;
@@ -399,16 +502,18 @@ export function MediaEditModal({
         }
       }
 
-
-      if (payload.posterUrl || payload.backdropUrl || payload.videoLink || payload.logoUrl) {
+      if (
+        payload.posterUrl ||
+        payload.backdropUrl ||
+        payload.videoLink ||
+        payload.logoUrl
+      ) {
         await callFunction("tmdbManualSet", payload, idToken);
       }
 
       // 3) Reflect changes back to caller immediately
       const patch: Record<string, any> = {};
 
-      // 🔹 Always keep local title fields in sync with whatever match is selected,
-      // just like we do for posterUrl. This makes the library update instantly.
       const newTitle =
         selectedMatch.title ||
         item.current.displayTitle ||
@@ -423,18 +528,15 @@ export function MediaEditModal({
         (patch as any).displayTitle = newTitle;
       }
 
-      // 🔹 Keep tmdbId in sync locally so future opens of the modal see
-      // the correct "current" match.
       patch.tmdbId = selectedMatch.tmdbId;
 
-      // Existing asset patches (posters, backdrops, trailers, logos)
       if (payload.posterUrl) patch.posterUrl = payload.posterUrl;
       if (payload.backdropUrl) patch.backdropUrl = payload.backdropUrl;
       if (payload.videoLink) patch.videoLink = payload.videoLink;
       if (payload.logoUrl) patch.logoUrl = payload.logoUrl;
 
       onApplied?.(item.id, patch);
-      onAfterUpdate?.(); // <- let parent refresh optimistically
+      onAfterUpdate?.();
 
       toast({ title: "Media updated" });
       onClose();
@@ -457,12 +559,13 @@ export function MediaEditModal({
         <DialogHeader>
           <DialogTitle>Edit Media</DialogTitle>
           <DialogDescription>
-            Fix the match or <b>stage</b> new artwork/logo/trailer for &quot;{displayTitleText}
+            Fix the match or <b>stage</b> new artwork/logo/trailer for &quot;
+            {displayTitleText}
             &quot;. Changes are applied when you click <b>Update Media</b>.
           </DialogDescription>
         </DialogHeader>
 
-        {/* MAIN GRID - 25/75 via 1:3 column split on md+ */}
+        {/* MAIN GRID */}
         <div className="grid md:grid-cols-12 gap-6 flex-1 min-h-0">
           {/* LEFT (search + results) */}
           <div className="flex flex-col gap-4 min-h-0 md:col-span-4">
@@ -470,10 +573,15 @@ export function MediaEditModal({
               <Input
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder={isMovie ? "Search movie title..." : "Search show title..."}
+                placeholder={
+                  isMovie ? "Search movie title..." : "Search show title..."
+                }
                 disabled={isSearching || isFixing}
               />
-              <Button type="submit" disabled={isSearching || isFixing || !searchQuery}>
+              <Button
+                type="submit"
+                disabled={isSearching || isFixing || !searchQuery}
+              >
                 {isSearching ? <Loader2 className="animate-spin" /> : <Search />}
               </Button>
             </form>
@@ -511,7 +619,9 @@ export function MediaEditModal({
                       )}
                       <div className="flex-1">
                         <p className="font-semibold text-sm">{result.title}</p>
-                        <p className="text-xs text-muted-foreground">{result.year}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {result.year}
+                        </p>
                       </div>
                       {selectedMatch?.tmdbId === result.id && (
                         <CheckCircle className="w-5 h-5 text-primary" />
@@ -529,8 +639,11 @@ export function MediaEditModal({
 
           {/* RIGHT (asset tabs) */}
           <div className="flex flex-col gap-4 min-h-0 md:col-span-8">
-            <Tabs defaultValue="posters" className="w-full flex-1 flex flex-col min-h-0">
-              <TabsList className="flex w-full">
+            <Tabs
+              defaultValue="posters"
+              className="w-full flex-1 flex flex-col min-h-0"
+            >
+              <TabsList className="flex w-full shrink-0">
                 <TabsTrigger value="posters" className="flex-1">
                   <ImageIcon className="mr-2" /> Posters
                 </TabsTrigger>
@@ -545,7 +658,8 @@ export function MediaEditModal({
                 </TabsTrigger>
               </TabsList>
 
-              <div className="pt-4 flex-1 min-h-0 overflow-x-hidden overflow-y-scroll">
+              {/* TABS CONTENT CONTAINER */}
+              <div className="pt-4 flex-1 min-h-0 flex flex-col overflow-hidden">
                 {mediaLoading && (
                   <div className="flex items-center justify-center h-full">
                     <Loader2 className="animate-spin text-muted-foreground" />
@@ -557,15 +671,14 @@ export function MediaEditModal({
                     {/* Posters */}
                     <TabsContent
                       value="posters"
-                      className="flex-1 m-0 min-h-0 data-[state=inactive]:hidden"
+                      className="flex-1 flex flex-col min-h-0 m-0 data-[state=inactive]:hidden"
                     >
-                      <ScrollArea className="h-full">
-                        <div className="grid grid-cols-4 gap-2 pr-4">
+                      <ScrollArea className="flex-1">
+                        <div className="grid grid-cols-4 gap-2 pr-4 pb-2">
                           {mediaData.posters.map((p) => {
-                            const isActive =
-                              stagedPoster
-                                ? stagedPoster === p.url
-                                : item?.current.posterUrl === p.url;
+                            const isActive = stagedPoster
+                              ? stagedPoster === p.url
+                              : item?.current.posterUrl === p.url;
                             return (
                               <button
                                 key={p.url}
@@ -575,26 +688,34 @@ export function MediaEditModal({
                                   isActive ? "ring-2 ring-primary" : "ring-0"
                                 )}
                               >
-                                <Image src={p.url} alt="Poster" fill className="object-cover" />
+                                <Image
+                                  src={p.url}
+                                  alt="Poster"
+                                  fill
+                                  className="object-cover"
+                                />
                               </button>
                             );
                           })}
                         </div>
                       </ScrollArea>
+                      <ManualUrlInput
+                        placeholder="Select poster OR enter image URL..."
+                        onApply={stagePoster}
+                      />
                     </TabsContent>
 
-                    {/* Logos (NEW) */}
+                    {/* Logos */}
                     <TabsContent
                       value="logos"
-                      className="flex-1 m-0 min-h-0 data-[state=inactive]:hidden"
+                      className="flex-1 flex flex-col min-h-0 m-0 data-[state=inactive]:hidden"
                     >
-                      <ScrollArea className="h-full">
-                        <div className="grid grid-cols-2 sm:grid-cols-2 gap-2 pr-4">
+                      <ScrollArea className="flex-1">
+                        <div className="grid grid-cols-2 sm:grid-cols-2 gap-2 pr-4 pb-2">
                           {mediaData.logos.map((l) => {
-                            const isActive =
-                              stagedLogo
-                                ? stagedLogo === l.url
-                                : item?.current.logoUrl === l.url;
+                            const isActive = stagedLogo
+                              ? stagedLogo === l.url
+                              : item?.current.logoUrl === l.url;
                             return (
                               <button
                                 key={l.url}
@@ -620,20 +741,23 @@ export function MediaEditModal({
                           )}
                         </div>
                       </ScrollArea>
+                      <ManualUrlInput
+                        placeholder="Select logo OR enter image URL..."
+                        onApply={stageLogo}
+                      />
                     </TabsContent>
 
                     {/* Backdrops */}
                     <TabsContent
                       value="backdrops"
-                      className="flex-1 m-0 min-h-0 data-[state=inactive]:hidden"
+                      className="flex-1 flex flex-col min-h-0 m-0 data-[state=inactive]:hidden"
                     >
-                      <ScrollArea className="h-full">
-                        <div className="grid grid-cols-2 gap-2 pr-4">
+                      <ScrollArea className="flex-1">
+                        <div className="grid grid-cols-2 gap-2 pr-4 pb-2">
                           {mediaData.backdrops.map((b) => {
-                            const isActive =
-                              stagedBackdrop
-                                ? stagedBackdrop === b.url
-                                : item?.current.backdropUrl === b.url;
+                            const isActive = stagedBackdrop
+                              ? stagedBackdrop === b.url
+                              : item?.current.backdropUrl === b.url;
                             return (
                               <button
                                 key={b.url}
@@ -643,31 +767,44 @@ export function MediaEditModal({
                                   isActive ? "ring-2 ring-primary" : "ring-0"
                                 )}
                               >
-                                <Image src={b.url} alt="Backdrop" fill className="object-cover" />
+                                <Image
+                                  src={b.url}
+                                  alt="Backdrop"
+                                  fill
+                                  className="object-cover"
+                                />
                               </button>
                             );
                           })}
                         </div>
                       </ScrollArea>
+                      <ManualUrlInput
+                        placeholder="Select backdrop OR enter image URL..."
+                        onApply={stageBackdrop}
+                      />
                     </TabsContent>
 
                     {/* Trailers */}
                     <TabsContent
                       value="trailers"
-                      className="flex-1 m-0 min-h-0 data-[state=inactive]:hidden"
+                      className="flex-1 flex flex-col min-h-0 m-0 data-[state=inactive]:hidden"
                     >
-                      <ScrollArea className="h-full">
-                        <div className="space-y-2 pr-4">
+                      <ScrollArea className="flex-1">
+                        <div className="space-y-2 pr-4 pb-2">
                           {mediaData.videos.map((v) => {
-                            const isActive =
-                              stagedVideoKey
-                                ? stagedVideoKey === v.key
-                                : item?.current.videoLink ===
-                                  `https://www.youtube.com/watch?v=${v.key}`;
+                            // Check if this card matches EITHER the staged key OR the current link
+                            const isActive = stagedVideoKey
+                              ? stagedVideoKey === v.key
+                              : item?.current.videoLink ===
+                                `https://www.youtube.com/watch?v=${v.key}`;
+                            
                             return (
                               <button
                                 key={v.key}
-                                onClick={() => stageVideo(v.key)}
+                                onClick={() => {
+                                  setStagedVideoKey(v.key);
+                                  setStagedVideoUrl(null);
+                                }}
                                 className={cn(
                                   "w-full flex items-center gap-3 p-2 rounded-md hover:bg-muted group ring-offset-2 ring-offset-background",
                                   isActive ? "ring-2 ring-primary" : "ring-0"
@@ -682,22 +819,30 @@ export function MediaEditModal({
                                   />
                                 </div>
                                 <div className="text-left">
-                                  <p className="text-sm font-medium">{v.name}</p>
-                                  <p className="text-xs text-muted-foreground">{v.type}</p>
+                                  <p className="text-sm font-medium">
+                                    {v.name}
+                                  </p>
+                                  <p className="text-xs text-muted-foreground">
+                                    {v.type}
+                                  </p>
                                 </div>
                               </button>
                             );
                           })}
                         </div>
                       </ScrollArea>
+                      <ManualUrlInput
+                        placeholder="Select trailer OR enter YouTube/video URL..."
+                        onApply={stageVideoInput}
+                      />
                     </TabsContent>
                   </>
                 )}
 
                 {!mediaLoading && !mediaData && (
-                  <div className="flexflex-col items-center justify-center h-full text-muted-foreground text-center">
-                    <ImageIcon />
-                    <p className="mt-2 text-sm">Select a match to see media</p>
+                  <div className="flex flex-col items-center justify-center h-full text-muted-foreground text-center">
+                    <ImageIcon className="h-10 w-10 mb-2 opacity-20" />
+                    <p className="text-sm">Select a match to see media</p>
                   </div>
                 )}
               </div>
@@ -714,7 +859,10 @@ export function MediaEditModal({
             <Button variant="outline" onClick={onClose} disabled={isFixing}>
               Cancel
             </Button>
-            <Button onClick={handleConfirmFix} disabled={!hasChanges || isFixing}>
+            <Button
+              onClick={handleConfirmFix}
+              disabled={!hasChanges || isFixing}
+            >
               {isFixing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Update Media
             </Button>

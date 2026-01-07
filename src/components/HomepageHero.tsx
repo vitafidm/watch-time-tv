@@ -164,7 +164,8 @@ export function HomepageHero({ item, onPlay }: HomepageHeroProps) {
             </h1>
           )}
 
-          <p className="line-clamp-1 sm:line-clamp-3 md:line-clamp-none text-sm sm:text-base text-foreground/80 leading-relaxed drop-shadow-lg">
+          {/* UPDATED: Removed 'md:line-clamp-none' and set to 'line-clamp-2 sm:line-clamp-3' */}
+          <p className="line-clamp-2 sm:line-clamp-3 text-sm sm:text-base text-foreground/80 leading-relaxed drop-shadow-lg">
             {item.overview}
           </p>
 

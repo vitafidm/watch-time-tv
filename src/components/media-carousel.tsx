@@ -297,9 +297,7 @@ function FeaturedCard(props: {
     ? showTimeChip
       ? `Resume • ${formatTimeShort(resumeSeconds ?? 0)}`
       : "Resume"
-    : isTv
-    ? "Resume"
-    : "Watch Now";
+    : "Watch Now"; 
 
   const handlePlayClick = (e: React.MouseEvent<HTMLButtonElement>) => {
     e.preventDefault();
@@ -309,7 +307,6 @@ function FeaturedCard(props: {
     else onPlay(undefined);
   };
 
-  // 🔹 NEW: logo support
   const logo = (item as any).logo_path as string | undefined;
 
   const Content = (
@@ -353,26 +350,26 @@ function FeaturedCard(props: {
 
         <div className="absolute inset-0 flex items-end justify-center px-4 py-6 sm:items-center sm:justify-start sm:p-8">
           <div className="w-full max-w-md md:max-w-lg lg:max-w-xl space-y-3 sm:space-y-4 text-center sm:text-left">
-            {/* 🔹 LOGO BOX */}
+            {/* Logo Box */}
             <div className="relative mx-auto sm:mx-0 h-16 sm:h-20 md:h-[11rem] w-full max-w-xs sm:max-w-sm md:max-w-md flex items-center justify-center sm:justify-start">
-  {logo ? (
-    <Image
-      src={logo}
-      alt={item.title}
-      fill
-      className="object-contain object-center sm:object-[left_bottom]"
-      priority={isActive}
-    />
-  ) : (
-    <h3 className="font-headline text-2xl sm:text-3xl md:text-4xl font-bold text-white drop-shadow-2xl leading-tight text-center sm:text-left">
-      {item.title}
-    </h3>
-  )}
-</div>
+              {logo ? (
+                <Image
+                  src={logo}
+                  alt={item.title}
+                  fill
+                  className="object-contain object-center sm:object-[left_bottom]"
+                  priority={isActive}
+                />
+              ) : (
+                <h3 className="font-headline text-2xl sm:text-3xl md:text-4xl font-bold text-white drop-shadow-2xl leading-tight text-center sm:text-left">
+                  {item.title}
+                </h3>
+              )}
+            </div>
 
-
+            {/* UPDATED OVERVIEW PARAGRAPH */}
             {(item as any).overview ? (
-              <p className="sm:block line-clamp-2 sm:line-clamp-3 text-sm sm:text-base text-white/80 leading-relaxed drop-shadow-lg">
+              <p className="line-clamp-2 sm:line-clamp-3 text-sm sm:text-base text-white/80 leading-relaxed drop-shadow-lg">
                 {(item as any).overview}
               </p>
             ) : null}
@@ -503,11 +500,11 @@ export function MediaCarousel({
     ? "basis-full"
     : layout === "horizontal"
     ? size === "lg"
-      ? "basis-[85%] pl-4 sm:basis-[60%] md:basis-1/2 lg:basis-1/3 xl:basis-1/3 2xl:basis-1/4"
-      : "basis-[70%] pl-4 sm:basis-[50%] md:basis-1/3 lg:basis-1/4 xl:basis-1/4 2xl:basis-1/6"
+      ? "basis-[100%] pl-4 sm:basis-[50%] md:basis-1/3 lg:basis-1/3 xl:basis-1/4 2xl:basis-1/4"
+      : "basis-[50%] pl-4 xs:basis-1/2 sm:basis-1/3 md:basis-1/4 lg:basis-1/5 xl:basis-1/6 2xl:basis-1/6"
     : size === "lg"
-    ? "basis-2/3 pl-4 sm:basis-1/2 md:basis-1/3 lg:basis-1/4 xl:basis-1/4 2xl:basis-1/5"
-    : "basis-1/2 pl-4 sm:basis-1/4 md:basis-1/5 lg:basis-1/6 xl:basis-1/7 2xl:basis-[12.5%]";
+    ? "basis-1/2 pl-4 sm:basis-1/3 md:basis-1/4 lg:basis-1/4 xl:basis-1/5 2xl:basis-1/5"
+    : "basis-1/3 pl-4 sm:basis-1/4 md:basis-1/6 lg:basis-[14.2%] xl:basis-[12.5%] 2xl:basis-[12.5%]";
 
   const carouselOpts = React.useMemo(
     () => ({

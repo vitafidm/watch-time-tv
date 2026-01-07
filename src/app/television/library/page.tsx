@@ -222,7 +222,7 @@ function TvLibrary() {
 
   const uid = user?.uid ?? null;
 
-  // 🔹 Fetch all shows once (episodeCount > 0), with simple in-memory cache
+  // 🔹 Fetch all shows, with simple in-memory cache & Deduplication
   const fetchShows = useCallback(
     async (opts?: { forceNetwork?: boolean }) => {
       if (!uid) return;
@@ -251,7 +251,8 @@ function TvLibrary() {
 
         const snap = await getDocs(q);
 
-        const all: ShowDoc[] = snap.docs.map((docSnap) => {
+        // 1. Convert snapshots to raw ShowDoc objects
+        const rawShows: ShowDoc[] = snap.docs.map((docSnap) => {
           const data = docSnap.data() as any;
           return {
             id: docSnap.id,
@@ -270,19 +271,49 @@ function TvLibrary() {
           };
         });
 
-        // ✅ In-memory A→Z sort by displayTitle || title (case-insensitive)
-        all.sort((a, b) => {
+        // 2. 🔹 Deduplicate Logic: Group by TMDB ID
+        const uniqueShowsMap = new Map<string | number, ShowDoc>();
+
+        for (const show of rawShows) {
+          // Use tmdbShowId as the key if it exists; otherwise fallback to the document ID
+          const key = show.tmdbShowId ? show.tmdbShowId : `doc_${show.id}`;
+
+          if (uniqueShowsMap.has(key)) {
+            // Duplicate found! Merge it into the existing entry.
+            const existing = uniqueShowsMap.get(key)!;
+
+            // A. Sum the episode counts
+            existing.episodeCount = (existing.episodeCount || 0) + (show.episodeCount || 0);
+
+            // B. If the existing one is missing artwork, borrow it from the duplicate
+            if (!existing.posterUrl && show.posterUrl) existing.posterUrl = show.posterUrl;
+            if (!existing.backdropUrl && show.backdropUrl) existing.backdropUrl = show.backdropUrl;
+            if (!existing.logoUrl && show.logoUrl) existing.logoUrl = show.logoUrl;
+            
+            // C. Keep the most recent update time
+            if (show.updatedAt > existing.updatedAt) existing.updatedAt = show.updatedAt;
+
+          } else {
+            // New unique show, add it to the map
+            uniqueShowsMap.set(key, { ...show });
+          }
+        }
+
+        const uniqueShows = Array.from(uniqueShowsMap.values());
+
+        // 3. Sort A→Z by displayTitle || title (case-insensitive)
+        uniqueShows.sort((a, b) => {
           const nameA = (a.displayTitle || a.title || "").toLocaleLowerCase();
           const nameB = (b.displayTitle || b.title || "").toLocaleLowerCase();
           return nameA.localeCompare(nameB, undefined, { sensitivity: "base" });
         });
 
-        setShows(all);
+        setShows(uniqueShows);
 
         // 🔒 Update cache
         showsCache = {
           uid,
-          shows: all,
+          shows: uniqueShows,
           ts: Date.now(),
         };
       } catch (error) {
